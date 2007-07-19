@@ -1,0 +1,18 @@
+now:
+  
+  implement locking
+  normalize exceptions
+
+later:
+
+  define 
+
+maybe:
+
+  allow chunks to be gzip'd?
+  allow sub second steps?
+  change indexing to be based on arbitrary index:
+    would help with sub second steps
+    define a base time and the define units for index
+    eg. could use ms offsets instead of sec
+    

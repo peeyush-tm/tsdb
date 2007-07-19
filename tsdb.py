@@ -28,11 +28,6 @@ File structure:
 >>> set = db.add_set("example_set")
 >>> var = set.add_var("example_var", Counter32, 60, YYYYMMDDChunkMapper)
 """
-#
-# XXX add metadata to TSDBSet
-# XXX generalize meta data parsing
-# XXX no support for sub second steps
-#
 import struct
 import mmap
 import os
@@ -64,10 +59,16 @@ time.tzset()
 class TSDBError(Exception):
     pass
 
+class TSDBAlreadyExistsError(Exception):
+    pass
+
 class TSDBSetDoesNotExistError(TSDBError):
     pass
 
 class TSDBVarDoesNotExistError(TSDBError):
+    pass
+
+class TSDBNameInUseError(TSDBError):
     pass
 
 class TSDBRow(object):
@@ -358,7 +359,7 @@ class TSDB(TSDBBase):
     @classmethod 
     def create(klass, path, metadata={}):
         if os.path.exists(os.path.join(path, "TSDB")):
-            raise "database already exists"
+            raise TSDBAlreadyExistsError("database already exists")
 
         metadata["CREATION_TIME"] = time.time()
 
@@ -396,7 +397,7 @@ class TSDBSet(TSDBBase):
     def create(klass, root, name, metadata={}):
         path = os.path.join(root, name)
         if os.path.exists(path):
-            raise "set %s already exists" % set
+            raise TSDBNameInUseError("%s already exists" % set)
 
         os.mkdir(path)
         write_dict(os.path.join(path, klass.tag), metadata)
@@ -418,7 +419,7 @@ class TSDBVar(TSDBBase):
         TSDBBase.__init__(self)
 
         if not os.path.exists(path):
-            raise "TSDBVar does not exist:", path
+            raise TSDBVarDoesNotExistError("TSDBVar does not exist:" + path)
 
         self.parent = parent
         self.path = path
@@ -442,7 +443,7 @@ class TSDBVar(TSDBBase):
     def create(klass, root, name, type, step, chunk_mapper, metadata={}):
         path = os.path.join(root, name)
         if os.path.exists(path):
-            raise "TSDBVar %s already exists" % name
+            raise TSDBNameInUseError("%s already exists" % name)
 
         metadata["NAME"] = name
         metadata["TYPE_ID"] = type.type_id
