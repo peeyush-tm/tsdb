@@ -2,10 +2,11 @@
 
 import sys
 import os.path
+import time
 
 import tsdb
 
-DB = "test_import"
+DB = "/data/snmp/test_import"
 
 type_map = {
     'ifHCInOctets': tsdb.Counter64,
@@ -16,40 +17,75 @@ type_map = {
 }
 
 if not os.path.exists(os.path.join(DB,"TSDB")):
-    db = tsdb.TSDB.create(DB, tsdb.YYYYMMChunkMapper)
+    db = tsdb.TSDB.create(DB, tsdb.EpochWeekMapper)
+#    db = tsdb.TSDB.create(DB, tsdb.YYYYMMChunkMapper)
 else:
     db = tsdb.TSDB(DB)
 
-for arg in sys.argv[1:]:
-    (rtr,out) = arg.split(".")
-    print rtr
+def main():
+    for arg in sys.argv[1:]:
+        (rtr,out) = os.path.basename(arg).split(".")
+        print rtr
+    
+        if rtr not in db.list_sets():
+            set = db.add_set(rtr)
+        else:
+            set = db.get_set(rtr)
+    
+        vartab = {}
+        rows = 0
+        begin = time.time()
+        f = open(arg, "r")
+        for line in f:
+            #        print line
+            line = line.strip()
+            if line == '':
+                continue
+    
+            rows += 1
+    
+            (tstamp, var, val) = line.split()
+            tstamp = int(tstamp)
+            val = int(val)
+    
+            type = type_map[var.split('.')[0]]
+    
+            if var not in vartab:
+                if var not in set.list_vars():
+                    print "CREATE ", var
+                    vartab[var] = set.add_var(var, type, 30)
+                else:
+                    vartab[var] = set.get_var(var, use_mmap=True)
+    
+            new_data = type(tstamp, tsdb.ROW_VALID, val)
+#            old_data = vartab[var].select(tstamp)
+    
+#            if old_data.flags & tsdb.ROW_VALID:
+#                pass
+                #print "warning: overwriting %s with %s" % (old_data, new_data)
 
-    if rtr not in db.list_sets():
-        set = db.add_set(rtr)
-    else:
-        set = db.get_set(rtr)
+            #def insert(var):
+            #    vartab[var].insert(new_data)
 
-    vartab = {}
-    f = open(arg, "r")
-    for line in f:
-        #        print line
-        line = line.strip()
-        if line == '':
-            continue
-
-        (tstamp, var, val) = line.split()
-        tstamp = int(tstamp)
-        val = int(val)
-
-        type = type_map[var.split('.')[0]]
+            #insert(var)
+            vartab[var].insert(new_data)
+    
+        for var in vartab:
+            vartab[var].close()
+    
+        print "imported %d rows in %f seconds" % (rows, time.time() - begin)
 
 
-        if var not in vartab:
-            if var not in set.list_vars():
-                print "++++ CREATE"
-                vartab[var] = set.add_var(var, type, 30)
-            else:
-                vartab[var] = set.get_var(var)
+if __name__ == '__main__':
+    main()
+#    1/0
+#    import hotshot, hotshot.stats
+#    prof = hotshot.Profile('fooprof')
+#    prof.runcall(main)
+#    prof.close()
+#    stats = hotshot.stats.load('fooprof')
+#    stats.strip_dirs()
+#    stats.sort_stats('time', 'calls')
+#    stats.print_stats()
 
-        vartab[var].insert(type(tstamp, tsdb.ROW_VALID, val))
 

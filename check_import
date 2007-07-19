@@ -15,10 +15,7 @@ type_map = {
     'sysUpTimeInstance': tsdb.Counter32
 }
 
-if not os.path.exists(os.path.join(DB,"TSDB")):
-    db = tsdb.TSDB.create(DB, tsdb.YYYYMMChunkMapper)
-else:
-    db = tsdb.TSDB(DB)
+db = tsdb.TSDB(DB)
 
 for arg in sys.argv[1:]:
     (rtr,out) = arg.split(".")
@@ -45,11 +42,19 @@ for arg in sys.argv[1:]:
 
 
         if var not in vartab:
-            if var not in set.list_vars():
-                print "++++ CREATE"
-                vartab[var] = set.add_var(var, type, 30)
-            else:
-                vartab[var] = set.get_var(var)
+            vartab[var] = set.get_var(var)
 
-        vartab[var].insert(type(tstamp, tsdb.ROW_VALID, val))
+        dbval = vartab[var].select(tstamp)
+
+        if dbval.value != val:
+            print line
+            print val,'!=',dbval.value,'tstamp',tstamp
+            print "offset", vartab[var]._chunk(tstamp)._offset(tstamp)
+            print "=" * 78
+
+        if dbval.timestamp != tstamp:
+            print line
+            print "timestamps don't match",tstamp,dbval.timestamp
+            print "offset", vartab[var]._chunk(tstamp)._offset(tstamp)
+            print "=" * 78
 

@@ -1,24 +1,6 @@
 """
 Prototype implementation of TSDB.
 
-Datafile format:
-
-    Header (2048 bytes)
-    Records
-
-    Header:
-
-    Byte offset  Description
-    -----------  ------------------
-    0-3          'TSDB'
-    4            file format version
-    5            variable type
-    5-261        variable name
-    262-265      begin in unixtime
-    266-269      end in unixtime
-    270-273      step in seconds
-    274-2047     reserved for expansion
-
 All timestamps are seconds since the epoch in UTC
 
 File structure:
@@ -41,8 +23,10 @@ File structure:
     $ROOT/snv1-mr1/ifInOctets.1/metadata
     $ROOT/snv1-mr1/ifInOctets.1/200704
 
-    header is replicated in each data file for redundancy's sake
 
+>>> db = TSDB.create("tsdb_example")
+>>> set = db.add_set("example_set")
+>>> var = set.add_var("example_var", Counter32, 60, YYYYMMDDChunkMapper)
 """
 #
 # XXX add metadata to TSDBSet
@@ -55,6 +39,7 @@ import os
 import os.path
 import time
 import calendar
+import warnings
 
 #from datetime import tzinfo, timedelta, datetime
 #
@@ -75,6 +60,15 @@ time.tzset()
 #    def pack(self):
 #        return struct.pack("!4sBBLL1778s", "TSDB", file_format_version, self.type,
 #                self.begin, self.end, self.step, "\0" * 1774)
+
+class TSDBError(Exception):
+    pass
+
+class TSDBSetDoesNotExistError(TSDBError):
+    pass
+
+class TSDBVarDoesNotExistError(TSDBError):
+    pass
 
 class TSDBRow(object):
     """TSDBRows are fixed in size, each subclass defines the size"""
@@ -97,19 +91,31 @@ class TSDBRow(object):
     def unpack(klass, s):
         return klass(*struct.unpack(klass.pack_format, s))
 
-    @classmethod
-    def size(klass):
-        return struct.calcsize(klass.pack_format)
+#    @classmethod
+#    def size(klass):
+#        return struct.calcsize(klass.pack_format)
+
+    def __str__(self):
+        return "ts: %d f: %d v: %d" % (self.timestamp, self.flags, self.value)
 
 class Counter32(TSDBRow):
     type_id = 1
     version = 1
     pack_format = TSDBRow.pack_format + "L"
+    size = 12
 
 class Counter64(TSDBRow):
     type_id = 2
     version = 1
     pack_format = TSDBRow.pack_format + "Q"
+    size = 16
+
+class Gauge32(TSDBRow):
+    type_id = 4
+    version = 1
+    pack_format = TSDBRow.pack_format + "L"
+    size = 12
+
 
 #
 # XXX not sure we really need the flags
@@ -146,6 +152,19 @@ class ChunkMapper(object):
         raise NotImplementedError("name")
 
 class YYYYMMChunkMapper(ChunkMapper):
+    """
+    Breaks variables into monthly chunks.
+
+    >>> m = YYYYMMChunkMapper()
+    >>> m.name(1184726536)
+    >>> n
+    '200707'
+    >>> m.begin(n)
+    1183248000
+    >>> m.size(n, 1, 60)
+    44640
+    """
+
     chunk_mapper_id = 1
 
     @classmethod
@@ -171,46 +190,136 @@ class YYYYMMChunkMapper(ChunkMapper):
 
         return ((end - begin)/step)*row_size
 
-CHUNKMAPPER_MAP = [ChunkMapper, YYYYMMChunkMapper]
-    
-class TSDB(object):
-    """A time series data base (TSDB).
-
-    Each TSDS is made up of collection of sets.  Each set contains one or more
-    variables.
+class YYYYMMDDChunkMapper(ChunkMapper):
     """
+    Breaks variables into daily chunks.
 
-    def __init__(self, path):
-        self.path = path
-        f = open(os.path.join(path, "TSDB"))
+    >>> m = YYYYMMDDChunkMapper()
+    >>> n = m.name(1184726536)
+    >>> n
+    '20070718'
+    >>> m.begin(n)
+    1184716800
+    >>> m.size(n, 1, 60)
+    1440
+    """
+    chunk_mapper_id = 2
+
+    @classmethod
+    def name(self, timestamp):
+        return  "%04d%02d%02d" % time.gmtime(timestamp)[:3]
+
+    @classmethod
+    def begin(self, name):
+        return calendar.timegm((int(name[:4]), int(name[4:6]), int(name[6:]), 0, 0, 0))
+
+    @classmethod
+    def size(self, name, row_size, step):
+        begin = self.begin(name)
+        (begin_year, begin_month, begin_day) = (int(name[:4]), int(name[4:6]), int(name[6:]))
+        (wdays,mdays) = calendar.monthrange(begin_year, begin_month)
+
+
+        if begin_day == mdays:
+            if begin_month == 12:
+                end_year = begin_year + 1
+                end_month = 1
+            else:
+                end_year = begin_year
+                end_month = begin_month + 1
+            end_day = 1
+        else:
+            end_year = begin_year
+            end_month = begin_month
+            end_day = begin_day + 1
+
+        end = calendar.timegm((end_year, end_month, end_day, 0, 0, 0))
+
+        return ((end - begin)/step)*row_size
+
+class EpochWeekMapper(ChunkMapper):
+    """
+    maps into chunks that are 7*24*60*60 seconds long, starting at the unix
+    epoch.
+
+    This is an experimental mapper attempting to improve performance.
+
+    >>> m = EpochWeekMapper()
+    >>> n = m.name(1184726536)
+    >>> n
+    '1958'
+    >>> m.begin(n)
+    1184198400
+    >>> m.size(n, 1, 60)
+    10080
+    """
+    chunk_mapper_id = 3
+    weeksecs = 604800
+
+    @classmethod
+    def name(self, timestamp):
+        return str(timestamp / self.weeksecs)
+
+    @classmethod
+    def begin(self, name):
+        return int(name) * self.weeksecs
+
+    @classmethod
+    def size(self, name, row_size, step):
+        return (self.weeksecs/step) * row_size
+
+
+CHUNK_MAPPER_MAP = [ChunkMapper, YYYYMMChunkMapper, EpochWeekMapper]
+  
+def write_dict(path, d):
+    f = open(path, "w")
+
+    for key in d:
+        f.write(key + ": " + str(d[key]) + "\n")
+
+    f.close()
+
+class TSDBBase(object):
+    def __init__(self,metadata={}):
+        self.metadata = metadata
+
+    def __str__(self):
+        return "%s [%s]" % (self.tag, self.path)
+
+    def load_metadata(self):
+        f = open(os.path.join(self.path, self.tag), "r")
+
         for line in f:
             line = line.strip()
             if line.startswith("#"):
                 continue
-            (var,val) = line.split(":")
+            (var,val) = line.split(':')
             val = val.strip()
-            if var == "chunk_mapper_id":
-                val = int(val)
-            setattr(self, var, val)
+            if self.metadata_map.has_key(var):
+                val = self.metadata_map[var](val)
+            self.metadata[var] = val
+
         f.close()
-        self.chunk_mapper = CHUNKMAPPER_MAP[self.chunk_mapper_id]
 
-    @classmethod 
-    def create(klass, path, chunk_mapper):
-        if os.path.exists(os.path.join(path, "TSDB")):
-            raise "database already exists"
+    def save_metadata(self):
+        write_dict(os.path.join(self.path, self.tag), self.metadata)
 
-        if not os.path.exists(path):
-            os.mkdir(path)
+    def get_metadata(self, var):
+        try:
+            return(self.metadata[var])
+        except:
+            return None
 
-        f = open(os.path.join(path, "TSDB"), "w")
-        print >>f, "chunk_mapper_id:", chunk_mapper.chunk_mapper_id
-        print >>f, "creation_time:", time.time()
-        f.close()
-        return klass(path)
+    def set_metadata(self, var, val):
+        if self.metadata_map.has_key(var):
+            val = self.metadata_map[var](val)
+
+        self.metadata[var] = val
 
     def list_sets(self):
-        return filter(lambda x: os.path.isdir(os.path.join(self.path,x)), os.listdir(self.path))
+        return filter( \
+                lambda x: TSDBSet.is_tsdb_set(os.path.join(self.path, x)),
+                os.listdir(self.path))
 
     def get_set(self, name):
         return TSDBSet(self, os.path.join(self.path, name))
@@ -219,82 +328,137 @@ class TSDB(object):
         TSDBSet.create(self.path, name)
         return self.get_set(name)
 
+    def list_vars(self):
+        return filter(TSDBVar.is_tsdb_var, os.listdir(self.path))
 
-class TSDBSet(object):
-    def __init__(self, tsdb, path):
-        if not os.path.exists(path):
-            raise "TSDBSet does not exist:", path
-        self.tsdb = tsdb
+    def get_var(self, name):
+        return TSDBVar(self, os.path.join(self.path, name))
+
+    def add_var(self, name, type, step, chunk_mapper, metadata={}):
+        TSDBVar.create(self.path, name, type, step, chunk_mapper)
+        return self.get_var(name)
+
+
+class TSDB(TSDBBase):
+    """A time series data base (TSDB).
+
+    Each TSDB is made up of collection of sets and variables.  Each set or
+    variable may contain any arbitrary collection of sets and variables.
+
+    """
+
+    tag = "TSDB"
+    metadata_map = {}
+
+    def __init__(self, path):
+        TSDBBase.__init__(self)
         self.path = path
-        self.metadata = os.path.join(self.path, "TSDBVar")
+        self.load_metadata()
+
+    @classmethod 
+    def create(klass, path, metadata={}):
+        if os.path.exists(os.path.join(path, "TSDB")):
+            raise "database already exists"
+
+        metadata["CREATION_TIME"] = time.time()
+
+        if not os.path.exists(path):
+            os.mkdir(path)
+
+        write_dict(os.path.join(path, klass.tag), metadata)
+
+        return klass(path)
+
+
+class TSDBSet(TSDBBase):
+    tag = "TSDBSet"
+    metadata_map = {}
+    def __init__(self, parent, path, metadata={}):
+        TSDBBase.__init__(self)
+        self.path = path
+        self.parent = parent
+
+        if not os.path.exists(path):
+            raise TSDBSetDoesNotExist()
+
+        self.load_metadata()
+
 
     @classmethod
-    def create(self, root, name):
+    def is_tsdb_set(klass, path):
+        if os.path.isdir(path) and \
+            os.path.isfile(os.path.join(path,klass.tag)):
+            return True
+        else:
+            return False
+
+    @classmethod
+    def create(klass, root, name, metadata={}):
         path = os.path.join(root, name)
         if os.path.exists(path):
             raise "set %s already exists" % set
 
         os.mkdir(path)
+        write_dict(os.path.join(path, klass.tag), metadata)
 
-    def list_vars(self):
-        return filter(lambda x: os.path.isdir(os.path.join(self.path,x)), os.listdir(self.path))
+    def lock(self, block=True):
+        warnings.warn("locking not implemented yet")
 
-    def add_var(self, name, type, step):
-        TSDBVar.create(self.path, name, type, step)
-        return self.get_var(name)
+    def unlock(self):
+        warnings.warn("locking not implemented yet")
 
-    def get_var(self, name):
-        return TSDBVar(self, os.path.join(self.path, name))
-
-class TSDBVar(object):
+class TSDBVar(TSDBBase):
     """A variable in the database."""
-    def __init__(self, tsdb_set, path):
+
+    tag = "TSDBVar"
+    metadata_map = {'STEP': int, 'TYPE_ID': int,
+            'VERSION': int, 'CHUNK_MAPPER_ID': int}
+
+    def __init__(self, parent, path, use_mmap=False, metadata={}):
+        TSDBBase.__init__(self)
+
         if not os.path.exists(path):
             raise "TSDBVar does not exist:", path
 
-        self.tsdb_set = tsdb_set
+        self.parent = parent
         self.path = path
-        self.metadata = os.path.join(self.path, "TSDBVar")
-        if not os.path.exists(self.metadata):
-            raise "TSDBVar %s has no metadata"
+        self.use_mmap = use_mmap
 
-        f = open(self.metadata, "r")
-        for line in f:
-            line = line.strip()
-            if line.startswith("#"):
-                continue
-            (var,val) = line.split(":")
-            val = val.strip()
-            if var == "step" or var == "type_id" or var == "version":
-                val = int(val)
-            setattr(self, var, val)
-        f.close()
+        self.load_metadata()
 
-        self.type = TYPE_MAP[self.type_id]
+        self.type = TYPE_MAP[self.metadata['TYPE_ID']]
         self.chunks = {} # memory resident chunks
-        self.chunk_mapper = self.tsdb_set.tsdb.chunk_mapper
+        self.chunk_mapper = CHUNK_MAPPER_MAP[self.metadata['CHUNK_MAPPER_ID']]
 
     @classmethod
-    def create(klass, root, name, type, step, extra={}):
+    def is_tsdb_var(klass, path):
+        if os.path.isdir(path) and \
+            os.path.isfile(os.path.join(path,klass.tag)):
+            return True
+        else:
+            return False
+
+    @classmethod
+    def create(klass, root, name, type, step, chunk_mapper, metadata={}):
         path = os.path.join(root, name)
         if os.path.exists(path):
             raise "TSDBVar %s already exists" % name
 
+        metadata["NAME"] = name
+        metadata["TYPE_ID"] = type.type_id
+        metadata["VERSION"] = type.version
+        metadata["STEP"] = step
+        metadata["CREATION_TIME"] = time.time()
+        metadata["CHUNK_MAPPER_ID"] = chunk_mapper.chunk_mapper_id
+
         os.mkdir(path)
-        f = open(os.path.join(root,name,"TSDBVar"),"w")
-        print >>f, "name:", name
-        print >>f, "type_id:", type.type_id
-        print >>f, "version:", type.version
-        print >>f, "step:", step
-        print >>f, "creation_time:", time.time()
-        for key in extra:
-            print >>f, key+":", extra[key]
-        f.close()
+
+        write_dict(os.path.join(path, klass.tag), metadata)
 
     def _chunk(self, timestamp):
         name = self.chunk_mapper.name(timestamp)
         if not self.chunks.has_key(name):
-            self.chunks[name] = TSDBVarChunk(self, os.path.join(self.path, name), name, timestamp)
+            self.chunks[name] = TSDBVarChunk(self, os.path.join(self.path, name), name, timestamp, self.use_mmap)
 
         return self.chunks[name]
 
@@ -307,61 +471,96 @@ class TSDBVar(object):
         return chunk.write_record(data)
 
     def flush(self):
-        pass
-
-    def flush_set(self, set):
-        pass
+        for chunk in self.chunks:
+            self.chunks[chunk].flush()
 
     def close(self):
-        pass
+        self.flush()
+        for chunk in self.chunks:
+            self.chunks[chunk].close()
 
-    def close_set(self, set):
-        pass
+    def lock(self, block=True):
+        """Acquire a write lock."""
+        warnings.warn("locking not implemented yet")
 
+    def unlock(self):
+        warnings.warn("locking not implemented yet")
 
 class TSDBVarChunk(object):
-    def __init__(self, tsdb_var, path, name, timestamp):
+    def __init__(self, tsdb_var, path, name, timestamp, use_mmap=False):
         if not os.path.exists(path):
             TSDBVarChunk.create(tsdb_var, path, timestamp)
 
         self.tsdb_var = tsdb_var
         self.path = path
         self.name = name
+        self.use_mmap = use_mmap
 
-#        self.fd = os.open(path, os.O_RDWR)
-#        self.mmap = mmap.mmap(self.fd, 0) # defaults are OK for other fields
         self.file = open(self.path, "r+")
+        self.size = os.path.getsize(self.path)
+
+        if self.use_mmap:
+            self.mmap = mmap.mmap(self.file.fileno(), self.size)
+            self.io = self.mmap
+        else:
+            self.io = self.file
+
         self.begin = tsdb_var.chunk_mapper.begin(os.path.basename(self.path))
 
     @classmethod
     def create(klass, tsdb_var, path, timestamp):
         f = open(path, "w")
         f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
-            tsdb_var.type.size(), tsdb_var.step))
+            tsdb_var.type.size, tsdb_var.metadata['STEP']))
         f.close()
 
     def flush(self):
-        return self.file.flush()
+        return self.io.flush()
+
+    def close(self):
+        return self.io.close()
 
     def seek(self, pos, whence=0):
-        return self.file.seek(pos,whence)
+        return self.io.seek(pos,whence)
 
     def tell(self):
-        return self.file.tell()
+        return self.io.tell()
 
     def write(self, s):
-        return self.file.write(s)
+        return self.io.write(s)
 
     def read(self, n):
-        return self.file.read(n)
+        return self.io.read(n)
 
     def _offset(self, timestamp):
-        return ((timestamp - self.begin) / self.tsdb_var.step) * self.tsdb_var.type.size()
+        return ((timestamp - self.begin) / self.tsdb_var.metadata['STEP']) * self.tsdb_var.type.size
 
     def write_record(self, data):
-        self.file.seek(self._offset(data.timestamp))
-        return self.file.write(data.pack())
+        if self.use_mmap:
+            o = self._offset(data.timestamp)
+            self.mmap[o:o+self.tsdb_var.type.size] = data.pack()
+        else:
+            self.io.seek(self._offset(data.timestamp))
+            return self.io.write(data.pack())
 
     def read_record(self, timestamp):
-        self.file.seek(self._offset(timestamp))
-        return self.tsdb_var.type.unpack(self.file.read(self.tsdb_var.type.size()))
+        if self.use_mmap:
+            o = self._offset(timestamp)
+            return self.tsdb_var.type.unpack(self.mmap[o:o+self.tsdb_var.type.size])
+        else:
+            self.io.seek(self._offset(timestamp))
+            return self.tsdb_var.type.unpack(self.io.read(self.tsdb_var.type.size))
+
+def _test():
+    """
+    This is here to clean up the example created by the doc tests:
+    >>> import os
+    >>> os.system("rm -rf tsdb_example")
+    0
+    """
+    import doctest
+    doctest.testmod()
+
+if __name__ == "__main__":
+    _test()
+
