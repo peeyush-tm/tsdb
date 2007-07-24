@@ -270,7 +270,7 @@ class EpochWeekMapper(ChunkMapper):
         return (self.weeksecs/step) * row_size
 
 
-CHUNK_MAPPER_MAP = [ChunkMapper, YYYYMMChunkMapper, EpochWeekMapper]
+CHUNK_MAPPER_MAP = [ChunkMapper, YYYYMMChunkMapper, YYYYMMDDChunkMapper, EpochWeekMapper]
   
 def write_dict(path, d):
     f = open(path, "w")
