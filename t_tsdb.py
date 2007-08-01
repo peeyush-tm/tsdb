@@ -64,7 +64,7 @@ class TestData(unittest.TestCase):
         self.db = TSDB.create("tsdb_test")
         
     def tearDown(self):
-        os.system("rm -rf tsdb_test")
+        pass #os.system("rm -rf tsdb_test")
 
     def testData(self):
         for t in TYPE_MAP[1:]:

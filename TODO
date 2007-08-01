@@ -2,13 +2,19 @@ now:
   
   implement locking
   normalize exceptions
+  complete basic documentation
 
 later:
 
-  define 
+  define aggregation functions
+  make TSDBVar iterable
 
 maybe:
 
+  refactor chunk management to be done by ChunkManagers
+  allow each variable to specify it's own ChunkMananger
+  rename current chunk management to FixedSizeChunkManager
+  implement variable size ChunkManager
   allow chunks to be gzip'd?
   allow sub second steps?
   change indexing to be based on arbitrary index:
