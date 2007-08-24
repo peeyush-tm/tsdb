@@ -59,13 +59,16 @@ time.tzset()
 class TSDBError(Exception):
     pass
 
-class TSDBAlreadyExistsError(Exception):
+class TSDBAlreadyExistsError(TSDBError):
     pass
 
 class TSDBSetDoesNotExistError(TSDBError):
     pass
 
 class TSDBVarDoesNotExistError(TSDBError):
+    pass
+
+class TSDBInvalidName(TSDBError):
     pass
 
 class TSDBNameInUseError(TSDBError):
@@ -351,8 +354,14 @@ class TSDBBase(object):
         return self.sets[name]
 
     def add_set(self, name):
-        TSDBSet.create(self.path, name)
-        return self.get_set(name)
+        prefix = self.path
+        set = self
+        for step in name.split('/'):
+            TSDBSet.create(prefix, step)
+            set = set.get_set(step)
+            prefix = os.path.join(prefix, step)
+
+        return set
 
     def list_vars(self):
         return filter(TSDBVar.is_tsdb_var, os.listdir(self.path))
@@ -364,6 +373,10 @@ class TSDBBase(object):
         return self.vars[name]
 
     def add_var(self, name, type, step, chunk_mapper, metadata={}):
+        prefix = os.path.dirname(name)
+        if prefix is not '':
+            self.add_set(prefix)
+
         TSDBVar.create(self.path, name, type, step, chunk_mapper)
         return self.get_var(name)
 
@@ -420,7 +433,7 @@ class TSDBSet(TSDBBase):
         self.parent = parent
 
         if not os.path.exists(path):
-            raise TSDBSetDoesNotExistError()
+            raise TSDBSetDoesNotExistError("TSDBSet does not exist " + path)
 
         self.load_metadata()
 

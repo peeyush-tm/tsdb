@@ -3,68 +3,105 @@ import os
 
 from tsdb import *
 
+TESTDB = "tsdb_test"
+
+def nuke_testdb():
+    os.system("rm -rf " + TESTDB)
+
 class CreateTSDB(unittest.TestCase):
     def testCreate(self):
         """can we create a db?"""
         try:
-            TSDB.create("tsdb_test")
+            TSDB.create(TESTDB)
         except:
             self.fail("unable to create db")
 
+        if not os.path.isdir(TESTDB):
+            self.fail("directory doesn't exist")
+
+        if not os.path.isfile(os.path.join(TESTDB,"TSDB")):
+            self.fail("metadata file TSDB doesn't exist")
+
     def testRecreate(self):
         """does trying to create the same db again fail?"""
-        TSDB.create("tsdb_test")
-        self.assertRaises(TSDBAlreadyExistsError, TSDB.create, "tsdb_test")
+        TSDB.create(TESTDB)
+        self.assertRaises(TSDBAlreadyExistsError, TSDB.create, TESTDB)
 
     def tearDown(self):
-        os.system("rm -rf tsdb_test")
+        nuke_testdb()
 
 class CreateTSDBSet(unittest.TestCase):
     def setUp(self):
-        self.db = TSDB.create("tsdb_test")
+        self.db = TSDB.create(TESTDB)
 
     def tearDown(self):
-        os.system("rm -rf tsdb_test")
+        nuke_testdb()
+
+    def doCreate(self, name):
+        try:
+            self.db.add_set(name)
+        except Exception, e:
+            print e.__class__.__name__, e
+            self.fail(e)
+
+        if not os.path.isdir(os.path.join(TESTDB,name)):
+            self.fail("directory doesn't exist")
+
+        if not os.path.isfile(os.path.join(TESTDB, name, "TSDBSet")):
+            self.fail("metadata file TSDBSet doesn't exist")
 
     def testCreate(self):
         """can we create a TSDBSet?"""
-        try:
-            self.db.add_set("foo")
-        except:
-            self.fail()
+        self.doCreate("foo")
+
+    def testPathCreate(self):
+        """can we create TSDBSet hierarchy?"""
+        self.doCreate("blort/foo/bar")
 
     def testRecreate(self):
         self.db.add_set("foo")
         self.assertRaises(TSDBNameInUseError, self.db.add_set, "foo")
 
-class CreateTSDBSet(unittest.TestCase):
+class CreateTSDBVar(unittest.TestCase):
     def setUp(self):
-        self.db = TSDB.create("tsdb_test")
-        self.set = self.db.add_set("foo")
+        self.db = TSDB.create(TESTDB)
 
     def tearDown(self):
-        os.system("rm -rf tsdb_test")
+        nuke_testdb()
+
+    def doCreate(self, name):
+        try:
+            self.db.add_var(name, Counter32, 60, YYYYMMDDChunkMapper)
+        except Exception, e:
+            self.fail(e)
+
+        if not os.path.isdir(os.path.join(TESTDB, name)):
+            self.fail("directory doesn't exist")
+
+        if not os.path.isfile(os.path.join(TESTDB, name, "TSDBVar")):
+            self.fail("metadata file TSDBVar doesn't exist")
 
     def testCreate(self):
         """can we create a TSDBVar?"""
-        try:
-            self.set.add_var("bar", Counter32, 60, YYYYMMDDChunkMapper)
-        except:
-            self.fail()
+        self.doCreate("bar")
+
+    def testPathCreate(self):
+        """can we create a TSDBVar inside a TSDBSet?"""
+        self.doCreate("baz/foo/bar")
 
     def testRecreate(self):
-        self.set.add_var("bar", Counter32, 60, YYYYMMDDChunkMapper)
-        self.assertRaises(TSDBNameInUseError, self.set.add_var, "bar", Counter32, 60, YYYYMMDDChunkMapper)
+        self.db.add_var("bar", Counter32, 60, YYYYMMDDChunkMapper)
+        self.assertRaises(TSDBNameInUseError, self.db.add_var, "bar", Counter32, 60, YYYYMMDDChunkMapper)
 
 class TestData(unittest.TestCase):
     ts = 1184863723
     step = 60
 
     def setUp(self):
-        self.db = TSDB.create("tsdb_test")
+        self.db = TSDB.create(TESTDB)
         
     def tearDown(self):
-        pass #os.system("rm -rf tsdb_test")
+        nuke_testdb()
 
     def testData(self):
         for t in TYPE_MAP[1:]:
@@ -83,7 +120,7 @@ class TestData(unittest.TestCase):
                     var.insert(v)
 
                 # see if the file is the right size
-                f = os.path.join("tsdb_test", vname, name)
+                f = os.path.join(TESTDB, vname, name)
                 if os.stat(f).st_size != size:
                     raise "chunk is wrong size:"
 
@@ -106,7 +143,7 @@ class TestData(unittest.TestCase):
                     if var.select(i).value != i:
                         raise "incorrect value at " + str(i)
 
-                    f = os.path.join("tsdb_test", vname, m.name(i))
+                    f = os.path.join(TESTDB, vname, m.name(i))
                     if os.stat(f).st_size != m.size(m.name(i), t.size,
                             self.step):
                         raise "chunk is wrong size at: " + str(i)
@@ -115,4 +152,5 @@ class TestData(unittest.TestCase):
         
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
+    nuke_testdb() 
     unittest.main()
