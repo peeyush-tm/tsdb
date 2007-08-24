@@ -356,10 +356,17 @@ class TSDBBase(object):
     def add_set(self, name):
         prefix = self.path
         set = self
-        for step in name.split('/'):
-            TSDBSet.create(prefix, step)
-            set = set.get_set(step)
+        steps = name.split('/')
+        for step in steps[:-1]:
+            try:
+                set = set.get_set(step)
+            except TSDBSetDoesNotExistError:
+                TSDBSet.create(prefix, step)
+                set = set.get_set(step)
+
             prefix = os.path.join(prefix, step)
+
+        set = TSDBSet.create(prefix, steps[-1])
 
         return set
 
@@ -375,7 +382,10 @@ class TSDBBase(object):
     def add_var(self, name, type, step, chunk_mapper, metadata={}):
         prefix = os.path.dirname(name)
         if prefix is not '':
-            self.add_set(prefix)
+            try:
+                set = self.get_set(prefix)
+            except TSDBSetDoesNotExistError:
+                self.add_set(prefix)
 
         TSDBVar.create(self.path, name, type, step, chunk_mapper)
         return self.get_var(name)
@@ -446,7 +456,7 @@ class TSDBSet(TSDBBase):
     def create(klass, root, name, metadata={}):
         path = os.path.join(root, name)
         if os.path.exists(path):
-            raise TSDBNameInUseError("%s already exists" % set)
+            raise TSDBNameInUseError("%s already exists at %s" % (name, path))
 
         os.mkdir(path)
         write_dict(os.path.join(path, klass.tag), metadata)
@@ -488,7 +498,7 @@ class TSDBVar(TSDBBase):
     def create(klass, root, name, vartype, step, chunk_mapper, metadata={}):
         path = os.path.join(root, name)
         if os.path.exists(path):
-            raise TSDBNameInUseError("%s already exists" % name)
+            raise TSDBNameInUseError("%s already exists at %s" % (name,path))
 
         if type(vartype) == str:
             exec("vartype = tsdb.%s" % vartype)

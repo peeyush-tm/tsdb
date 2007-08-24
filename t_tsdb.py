@@ -93,6 +93,28 @@ class CreateTSDBVar(unittest.TestCase):
         self.db.add_var("bar", Counter32, 60, YYYYMMDDChunkMapper)
         self.assertRaises(TSDBNameInUseError, self.db.add_var, "bar", Counter32, 60, YYYYMMDDChunkMapper)
 
+    def testGetPath(self):
+        self.db.add_var("foo/bar", Counter32, 60, YYYYMMDDChunkMapper)
+        try:
+            self.db.get_var("foo/bar")
+        except Exception, e:
+            self.fail(e)
+
+    def testGetLongPath(self):
+        self.db.add_var("blort/baz/foo/bar", Counter32, 60, YYYYMMDDChunkMapper)
+        try:
+            self.db.get_var("blort/baz/foo/bar")
+        except Exception, e:
+            self.fail(e)
+
+    def testOverlappingPaths(self):
+        self.db.add_var("blort/baz/foo/bar", Counter32, 60, YYYYMMDDChunkMapper)
+        try:
+            self.db.add_var("blort/baz/foo/bat", Counter32, 60, YYYYMMDDChunkMapper)
+        except Exception, e:
+            self.fail(e)
+
+
 class TestData(unittest.TestCase):
     ts = 1184863723
     step = 60
