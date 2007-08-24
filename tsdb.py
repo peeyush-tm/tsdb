@@ -366,7 +366,8 @@ class TSDBBase(object):
 
             prefix = os.path.join(prefix, step)
 
-        set = TSDBSet.create(prefix, steps[-1])
+        TSDBSet.create(prefix, steps[-1])
+        set = set.get_set(steps[-1])
 
         return set
 
