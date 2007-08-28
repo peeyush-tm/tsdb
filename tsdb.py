@@ -36,25 +36,9 @@ import time
 import calendar
 import warnings
 
-#from datetime import tzinfo, timedelta, datetime
-#
-#class UTC(tzinfo):
-#    def utcoffset(self, dt):
-#        return timedelta(0)
-#    def tzname(self, dt):
-#        return "UTC"
-#    def dst(self, dt):
-#        return timedelta(0)
-#
 
 os.environ['TZ'] = "UTC"
 time.tzset()
-
-#file_format_version = 1
-#class Header(object):
-#    def pack(self):
-#        return struct.pack("!4sBBLL1778s", "TSDB", file_format_version, self.type,
-#                self.begin, self.end, self.step, "\0" * 1774)
 
 class TSDBError(Exception):
     pass
@@ -97,10 +81,6 @@ class TSDBRow(object):
     @classmethod
     def unpack(klass, s):
         return klass(*struct.unpack(klass.pack_format, s))
-
-#    @classmethod
-#    def size(klass):
-#        return struct.calcsize(klass.pack_format)
 
     def __str__(self):
         return "ts: %d f: %d v: %d" % (self.timestamp, self.flags, self.value)
@@ -475,7 +455,7 @@ class TSDBVar(TSDBBase):
     metadata_map = {'STEP': int, 'TYPE_ID': int,
             'VERSION': int, 'CHUNK_MAPPER_ID': int}
 
-    def __init__(self, parent, path, use_mmap=False, metadata={}):
+    def __init__(self, parent, path, use_mmap=False, cache_chunks=False, metadata={}):
         TSDBBase.__init__(self)
 
         if not os.path.exists(path):
@@ -484,6 +464,7 @@ class TSDBVar(TSDBBase):
         self.parent = parent
         self.path = path
         self.use_mmap = use_mmap
+        self.cache_chunks = cache_chunks
 
         self.load_metadata()
 
@@ -502,6 +483,9 @@ class TSDBVar(TSDBBase):
             raise TSDBNameInUseError("%s already exists at %s" % (name,path))
 
         if type(vartype) == str:
+        name = self.chunk_mapper.name(timestamp)
+        name = self.chunk_mapper.name(timestamp)
+        name = self.chunk_mapper.name(timestamp)
             exec("vartype = tsdb.%s" % vartype)
         elif type(vartype) == int:
             vartype = TYPE_MAP[vartype]
@@ -518,6 +502,10 @@ class TSDBVar(TSDBBase):
         write_dict(os.path.join(path, klass.tag), metadata)
 
     def _chunk(self, timestamp):
+        if not self.cache_chunks:
+            for chunk in self.chunks:
+                self.chunks[chunk].close()
+
         name = self.chunk_mapper.name(timestamp)
         if not self.chunks.has_key(name):
             self.chunks[name] = TSDBVarChunk(self, os.path.join(self.path, name), name, timestamp, self.use_mmap)
@@ -643,7 +631,7 @@ def _test():
     0
     """
     import doctest
-    doctest.testmod()
+    doctest.testmod(verbose=True)
 
 if __name__ == "__main__":
     _test()
