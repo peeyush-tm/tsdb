@@ -354,10 +354,9 @@ class TSDBBase(object):
     def list_vars(self):
         return filter(TSDBVar.is_tsdb_var, os.listdir(self.path))
 
-    def get_var(self, name):
+    def get_var(self, name, **kwargs):
         if not self.vars.has_key(name):
-            self.vars[name] = TSDBVar(self, os.path.join(self.path, name))
-
+            self.vars[name] = TSDBVar(self, os.path.join(self.path, name), **kwargs) 
         return self.vars[name]
 
     def add_var(self, name, type, step, chunk_mapper, metadata={}):
@@ -483,9 +482,6 @@ class TSDBVar(TSDBBase):
             raise TSDBNameInUseError("%s already exists at %s" % (name,path))
 
         if type(vartype) == str:
-        name = self.chunk_mapper.name(timestamp)
-        name = self.chunk_mapper.name(timestamp)
-        name = self.chunk_mapper.name(timestamp)
             exec("vartype = tsdb.%s" % vartype)
         elif type(vartype) == int:
             vartype = TYPE_MAP[vartype]
@@ -503,8 +499,9 @@ class TSDBVar(TSDBBase):
 
     def _chunk(self, timestamp):
         if not self.cache_chunks:
-            for chunk in self.chunks:
+            for chunk in self.chunks.keys():
                 self.chunks[chunk].close()
+                del self.chunks[chunk]
 
         name = self.chunk_mapper.name(timestamp)
         if not self.chunks.has_key(name):

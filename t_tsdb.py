@@ -1,5 +1,6 @@
 import unittest
 import os
+import time
 
 from tsdb import *
 
@@ -114,6 +115,28 @@ class CreateTSDBVar(unittest.TestCase):
         except Exception, e:
             self.fail(e)
 
+class TestCaching(unittest.TestCase):
+    def setUp(self):
+        self.db = TSDB.create(TESTDB)
+        self.db.add_var("blort", Counter32, 60, YYYYMMDDChunkMapper)
+        
+    def tearDown(self):
+        nuke_testdb()
+
+    def testNoCaching(self):
+        v = self.db.get_var("blort")
+        v.insert(Counter32(time.time(), 0, 1))
+        v.insert(Counter32(time.time()+(32*24*3600), 0, 1))
+
+        self.assertEqual(len(v.chunks), 1)
+
+    def testCaching(self):
+        v = self.db.get_var("blort")
+        v.cache_chunks=True
+        v.insert(Counter32(time.time(), 0, 1))
+        v.insert(Counter32(time.time()+(32*24*3600), 0, 1))
+
+        self.assertEqual(len(v.chunks), 2)
 
 class TestData(unittest.TestCase):
     ts = 1184863723
