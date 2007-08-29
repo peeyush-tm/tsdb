@@ -6,8 +6,12 @@ from tsdb import *
 
 TESTDB = "tsdb_test"
 
-def nuke_testdb():
-    os.system("rm -rf " + TESTDB)
+class TSDBTestCase(unittest.TestCase):
+    def setUp(self):
+        self.db = TSDB.create(TESTDB)
+
+    def tearDown(self):
+        os.system("rm -rf " + TESTDB)
 
 class CreateTSDB(unittest.TestCase):
     def testCreate(self):
@@ -29,15 +33,9 @@ class CreateTSDB(unittest.TestCase):
         self.assertRaises(TSDBAlreadyExistsError, TSDB.create, TESTDB)
 
     def tearDown(self):
-        nuke_testdb()
+        os.system("rm -rf " + TESTDB)
 
-class CreateTSDBSet(unittest.TestCase):
-    def setUp(self):
-        self.db = TSDB.create(TESTDB)
-
-    def tearDown(self):
-        nuke_testdb()
-
+class CreateTSDBSet(TSDBTestCase):
     def doCreate(self, name):
         try:
             self.db.add_set(name)
@@ -63,13 +61,7 @@ class CreateTSDBSet(unittest.TestCase):
         self.db.add_set("foo")
         self.assertRaises(TSDBNameInUseError, self.db.add_set, "foo")
 
-class CreateTSDBVar(unittest.TestCase):
-    def setUp(self):
-        self.db = TSDB.create(TESTDB)
-
-    def tearDown(self):
-        nuke_testdb()
-
+class CreateTSDBVar(TSDBTestCase):
     def doCreate(self, name):
         try:
             self.db.add_var(name, Counter32, 60, YYYYMMDDChunkMapper)
@@ -115,14 +107,21 @@ class CreateTSDBVar(unittest.TestCase):
         except Exception, e:
             self.fail(e)
 
-class TestCaching(unittest.TestCase):
+class TSDBVarTestCase(TSDBTestCase):
     def setUp(self):
-        self.db = TSDB.create(TESTDB)
+        TSDBTestCase.setUp(self)
         self.db.add_var("blort", Counter32, 60, YYYYMMDDChunkMapper)
-        
-    def tearDown(self):
-        nuke_testdb()
+        self.v = self.db.get_var("blort")
 
+class TestGetData(TSDBVarTestCase):
+    def testGet(self):
+        self.assertRaises(TSDBVarChunkDoesNotExistError, self.v.get, 1)
+
+class TestMetadata(TSDBVarTestCase):
+    def testStep(self):
+        self.assertEqual(self.v.metadata['STEP'], 60)
+
+class TestCaching(TSDBVarTestCase):
     def testNoCaching(self):
         v = self.db.get_var("blort")
         v.insert(Counter32(time.time(), 0, 1))
@@ -138,15 +137,29 @@ class TestCaching(unittest.TestCase):
 
         self.assertEqual(len(v.chunks), 2)
 
-class TestData(unittest.TestCase):
+class TestChunkList(TSDBVarTestCase):
+    def setUp(self):
+        TSDBVarTestCase.setUp(self)
+        self.ts = 1188344425
+        self.v.insert(Counter32(self.ts, 0, 1))
+
+    def testOneChunk(self):
+        self.assertEqual(len(self.v.all_chunks()), 1)
+
+    def testTwoChunks(self):
+        self.v.insert(Counter32(self.ts + 24*3600, 0, 1))
+
+        self.assertEqual(len(self.v.all_chunks()), 2)
+
+        chunks = self.v.all_chunks()
+        chunks.sort()
+
+        self.assertEqual(chunks[0], "20070828")
+        self.assertEqual(chunks[1], "20070829")
+        
+class TestData(TSDBTestCase):
     ts = 1184863723
     step = 60
-
-    def setUp(self):
-        self.db = TSDB.create(TESTDB)
-        
-    def tearDown(self):
-        nuke_testdb()
 
     def testData(self):
         for t in TYPE_MAP[1:]:
@@ -171,7 +184,7 @@ class TestData(unittest.TestCase):
 
                 # read each value to check that the data got written correctly
                 for i in r:
-                    v = var.select(begin+i)
+                    v = var.get(begin+i)
                     if v.value != i:
                         raise "data bad at %s", str(i) + " " + str(begin+i) + " " + str(v)
 
@@ -185,7 +198,7 @@ class TestData(unittest.TestCase):
 
                 for i in (low,high):
                     var.insert( t(i, ROW_VALID, i) )
-                    if var.select(i).value != i:
+                    if var.get(i).value != i:
                         raise "incorrect value at " + str(i)
 
                     f = os.path.join(TESTDB, vname, m.name(i))
@@ -197,5 +210,4 @@ class TestData(unittest.TestCase):
         
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
-    nuke_testdb() 
     unittest.main()

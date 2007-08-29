@@ -52,6 +52,9 @@ class TSDBSetDoesNotExistError(TSDBError):
 class TSDBVarDoesNotExistError(TSDBError):
     pass
 
+class TSDBVarChunkDoesNotExistError(TSDBError):
+    pass
+
 class TSDBInvalidName(TSDBError):
     pass
 
@@ -152,8 +155,11 @@ class ChunkMapper(object):
     def name(self, timestamp):
         raise NotImplementedError("name")
 
+    def begin(self, name):
+        raise NotImplementedError("begin")
+
     def size(self):
-        raise NotImplementedError("name")
+        raise NotImplementedError("size")
 
 class YYYYMMChunkMapper(ChunkMapper):
     """
@@ -497,25 +503,76 @@ class TSDBVar(TSDBBase):
 
         write_dict(os.path.join(path, klass.tag), metadata)
 
-    def _chunk(self, timestamp):
-        if not self.cache_chunks:
-            for chunk in self.chunks.keys():
-                self.chunks[chunk].close()
-                del self.chunks[chunk]
+    def all_chunks(self):
+        return filter(lambda x: x != self.tag, os.listdir(self.path))
 
+    def _chunk(self, timestamp, create=False):
         name = self.chunk_mapper.name(timestamp)
+
         if not self.chunks.has_key(name):
-            self.chunks[name] = TSDBVarChunk(self, os.path.join(self.path, name), name, timestamp, self.use_mmap)
+            if not self.cache_chunks:
+                for chunk in self.chunks.keys():
+                    self.chunks[chunk].close()
+                    del self.chunks[chunk]
+
+            try:
+                self.chunks[name] = TSDBVarChunk(self, name, use_mmap=self.use_mmap)
+            except TSDBVarChunkDoesNotExistError:
+                if create:
+                    self.chunks[name] = TSDBVarChunk.create(self, name, use_mmap=self.use_mmap)
+                else:
+                    raise
 
         return self.chunks[name]
 
-    def select(self, timestamp):
+    def min_timestamp(self):
+        if not self.metadata.has_key('MIN_TIMESTAMP'):
+            self.metadata['MIN_TIMESTAMP'] = self.chunk_mapper.begin(self.all_chunks().sort()[0])
+            self.save_metadata()
+
+        return self.metadata['MIN_TIMESTAMP']
+
+    def get(self, timestamp):
+        if timestamp is None:
+            timestamp = self.min_timestamp()
+        else:
+            timestamp = int(timestamp)
+
         timestamp = int(timestamp)
         chunk = self._chunk(timestamp)
         return chunk.read_record(timestamp)
 
+    def select(self, begin=None, end=None, flags=None):
+        """select data based on timestamp or flags.
+
+        eg:
+
+        select()
+
+          all data for this var, valid or not
+
+        select(begin=10000)
+                   
+          all data with a timestamp equal to or greater than 10000
+
+        select(end=10000)
+
+          all data with a timestample equal to or less than 10000
+
+        select(begin=10000, end=20000)
+
+          all data in the range of timestamps 10000 to 20000 inclusive
+
+        select(flags=ROW_VALID)
+
+          all valid data """
+
+        def select_generator(var, begin, end, flags):
+            val = var.get(begin)
+            
+
     def insert(self, data):
-        chunk = self._chunk(data.timestamp)
+        chunk = self._chunk(data.timestamp, create=True)
         return chunk.write_record(data)
 
     def flush(self):
@@ -535,9 +592,10 @@ class TSDBVar(TSDBBase):
         warnings.warn("locking not implemented yet")
 
 class TSDBVarChunk(object):
-    def __init__(self, tsdb_var, path, name, timestamp, use_mmap=False):
+    def __init__(self, tsdb_var, name, use_mmap=False):
+        path = os.path.join(tsdb_var.path, name)
         if not os.path.exists(path):
-            TSDBVarChunk.create(tsdb_var, path, timestamp)
+            raise TSDBVarChunkDoesNotExistError(path)
 
         self.tsdb_var = tsdb_var
         self.path = path
@@ -556,11 +614,13 @@ class TSDBVarChunk(object):
         self.begin = tsdb_var.chunk_mapper.begin(os.path.basename(self.path))
 
     @classmethod
-    def create(klass, tsdb_var, path, timestamp):
+    def create(klass, tsdb_var, name, use_mmap=False):
+        path = os.path.join(tsdb_var.path, name)
         f = open(path, "w")
         f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
             tsdb_var.type.size, tsdb_var.metadata['STEP']))
         f.close()
+        return TSDBVarChunk(tsdb_var, name, use_mmap=use_mmap)
 
     def flush(self):
         return self.io.flush()
