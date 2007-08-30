@@ -156,7 +156,45 @@ class TestChunkList(TSDBVarTestCase):
 
         self.assertEqual(chunks[0], "20070828")
         self.assertEqual(chunks[1], "20070829")
-        
+    
+class TestSelect(TSDBVarTestCase):
+    def setUp(self):
+        TSDBVarTestCase.setUp(self)
+        self.l = range(0, 601, 60)
+        self.vars = []
+        for i in self.l:
+            if i/60 % 2 == 0:
+                flags = ROW_VALID
+            else:
+                flags = 0
+
+            self.vars.append(Counter32(i, flags, self.l.index(i)))
+            self.v.insert(self.vars[-1])
+
+    def testSingleSelect(self):
+        r = self.v.select(0,59)
+
+        i = 0
+        for x in r:
+            self.assertEqual(x, self.vars[i])
+            i += 1
+
+    def testMultipleSelect(self):
+        r = self.v.select(0,601)
+
+        i = 0
+        for x in r:
+            self.assertEqual(self.vars[i], x)
+            i += 1
+
+    def testFlagSelect(self):
+        r = self.v.select(0,599,flags=ROW_VALID)
+
+        i = 0
+        for x in r:
+            self.assertEqual(self.vars[i*2], x)
+            i += 1
+
 class TestData(TSDBTestCase):
     ts = 1184863723
     step = 60

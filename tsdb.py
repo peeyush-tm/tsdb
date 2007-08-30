@@ -55,6 +55,9 @@ class TSDBVarDoesNotExistError(TSDBError):
 class TSDBVarChunkDoesNotExistError(TSDBError):
     pass
 
+class TSDBVarRangeError(TSDBError):
+    pass
+
 class TSDBInvalidName(TSDBError):
     pass
 
@@ -86,9 +89,34 @@ class TSDBRow(object):
         return klass(*struct.unpack(klass.pack_format, s))
 
     def __str__(self):
-        return "ts: %d f: %d v: %d" % (self.timestamp, self.flags, self.value)
+        return "%s: [%d: %d/%d]" % (self.__class__.__name__, self.timestamp,
+                self.value, self.flags)
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __eq__(self, other):
+        if isinstance(other, TSDBRow):
+            return self.timestamp == other.timestamp \
+                    and self.flags == other.flags \
+                    and self.value == other.value \
+                    and self.type_id == other.type_id
+        else:
+            return NotImplemented
 
 class Counter32(TSDBRow):
+    """
+    Represents an SNMP Counter32 variable
+
+    >>> x = Counter32(1,1,1) 
+    >>> y = Counter32(1,1,1)
+    >>> x == y
+    True
+    >>> z = Counter32(1,1,2)
+    >>> x == z
+    False
+    """
+
     type_id = 1
     version = 1
     pack_format = TSDBRow.pack_format + "L"
@@ -98,6 +126,15 @@ class Counter32(TSDBRow):
         return int(str)
 
 class Counter64(TSDBRow):
+    """
+    >>> x = Counter64(1,1,1) 
+    >>> y = Counter64(1,1,1)
+    >>> x == y
+    True
+    >>> z = Counter64(1,1,2)
+    >>> x == z
+    False
+    """
     type_id = 2
     version = 1
     pack_format = TSDBRow.pack_format + "Q"
@@ -107,6 +144,15 @@ class Counter64(TSDBRow):
         return long(str)
 
 class Gauge32(TSDBRow):
+    """
+    >>> x = Gauge32(1,1,1) 
+    >>> y = Gauge32(1,1,1)
+    >>> x == y
+    True
+    >>> z = Gauge32(1,1,2)
+    >>> x == z
+    False
+    """
     type_id = 3
     version = 1
     pack_format = TSDBRow.pack_format + "L"
@@ -116,6 +162,15 @@ class Gauge32(TSDBRow):
         return int(str)
 
 class TimeTicks(TSDBRow):
+    """
+    >>> x = TimeTicks(1,1,1) 
+    >>> y = TimeTicks(1,1,1)
+    >>> x == y
+    True
+    >>> z = TimeTicks(1,1,2)
+    >>> x == z
+    False
+    """
     type_id = 4
     version = 1
     pack_format = TSDBRow.pack_format + "L"
@@ -504,9 +559,20 @@ class TSDBVar(TSDBBase):
         write_dict(os.path.join(path, klass.tag), metadata)
 
     def all_chunks(self):
-        return filter(lambda x: x != self.tag, os.listdir(self.path))
+        """all_chunks() -- list all chunks for the current var
+
+        chunks are anything that isn't either TSDBVar or a directory
+        """
+
+        return filter(lambda x: x != self.tag and not os.path.isdir(os.path.join(self.path,x)), os.listdir(self.path))
 
     def _chunk(self, timestamp, create=False):
+        """_chunk(timestamp, create=False)
+
+        fetches (and optionally creates if necessary) the chunk for timestamp
+
+        intended only to be called by member functions.
+        """
         name = self.chunk_mapper.name(timestamp)
 
         if not self.chunks.has_key(name):
@@ -540,36 +606,56 @@ class TSDBVar(TSDBBase):
 
         timestamp = int(timestamp)
         chunk = self._chunk(timestamp)
-        return chunk.read_record(timestamp)
+        try:
+            return chunk.read_record(timestamp)
+        except TSDBVarChunkDoesNotExistError:
+            raise TSDBVarRangeError(timestamp)
 
     def select(self, begin=None, end=None, flags=None):
         """select data based on timestamp or flags.
 
+        None is interpreted as "don't care"
+
         eg:
 
         select()
-
           all data for this var, valid or not
 
         select(begin=10000)
-                   
           all data with a timestamp equal to or greater than 10000
 
         select(end=10000)
-
           all data with a timestample equal to or less than 10000
 
         select(begin=10000, end=20000)
-
           all data in the range of timestamps 10000 to 20000 inclusive
 
         select(flags=ROW_VALID)
-
           all valid data """
 
         def select_generator(var, begin, end, flags):
-            val = var.get(begin)
-            
+            current = begin
+            d = var.get(current)
+
+            while True:
+                valid = True
+                if flags is not None and d.flags & flags != flags:
+                    valid = False
+    
+                if current > end:
+                    raise StopIteration
+
+                if valid:
+                    yield d
+
+                current += var.metadata['STEP']
+                try:
+                    d = var.get(current)
+                except TSDBVarRangeError:
+                    raise StopIteration
+
+
+        return select_generator(self, begin, end, flags)
 
     def insert(self, data):
         chunk = self._chunk(data.timestamp, create=True)
