@@ -413,7 +413,9 @@ class TSDBBase(object):
         return set
 
     def list_vars(self):
-        return filter(TSDBVar.is_tsdb_var, os.listdir(self.path))
+        return filter(lambda x: \
+                TSDBVar.is_tsdb_var(os.path.join(self.path, x)),
+                os.listdir(self.path))
 
     def get_var(self, name, **kwargs):
         if not self.vars.has_key(name):
@@ -491,7 +493,7 @@ class TSDBSet(TSDBBase):
 
     @classmethod
     def is_tsdb_set(klass, path):
-        return self.is_tag(path)
+        return klass.is_tag(path)
 
     @classmethod
     def create(klass, root, name, metadata={}):
@@ -534,7 +536,7 @@ class TSDBVar(TSDBBase):
 
     @classmethod
     def is_tsdb_var(klass, path):
-        return self.is_tag(path)
+        return klass.is_tag(path)
 
     @classmethod
     def create(klass, root, name, vartype, step, chunk_mapper, metadata={}):
