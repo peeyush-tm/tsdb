@@ -1,24 +1,21 @@
 now:
-  
   implement locking
   normalize exceptions
   complete basic documentation
 
-later:
-
   define aggregation functions
-  make TSDBVar iterable
+  make TSDBVar iterable -- started
 
 maybe:
 
-  refactor chunk management to be done by ChunkManagers
-  allow each variable to specify it's own ChunkMananger
-  rename current chunk management to FixedSizeChunkManager
+  convert metadata to JSON?
+  rename current chunk management to FixedSizeChunkMapper?
   implement variable size ChunkManager
   allow chunks to be gzip'd?
   allow sub second steps?
   change indexing to be based on arbitrary index:
     would help with sub second steps
     define a base time and the define units for index
-    eg. could use ms offsets instead of sec
+    eg. could use ms or us offsets instead of sec
+    (currently using seconds since the epoch)
     

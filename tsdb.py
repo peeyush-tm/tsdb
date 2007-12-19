@@ -593,9 +593,14 @@ class TSDBVar(TSDBBase):
 
         return self.chunks[name]
 
-    def min_timestamp(self):
-        if not self.metadata.has_key('MIN_TIMESTAMP'):
-            self.metadata['MIN_TIMESTAMP'] = self.chunk_mapper.begin(self.all_chunks().sort()[0])
+    def min_timestamp(self, recalculate=False):
+        if recalculate or not self.metadata.has_key('MIN_TIMESTAMP'):
+            chunks = self.all_chunks()
+            chunks.sort()
+            for row in self.select(begin=self.chunk_mapper.begin(chunks[0])):
+                if row.flags & ROW_VALID:
+                    self.metadata['MIN_TIMESTAMP'] = row.timestamp
+                    break
             self.save_metadata()
 
         return self.metadata['MIN_TIMESTAMP']
@@ -613,7 +618,7 @@ class TSDBVar(TSDBBase):
         except TSDBVarChunkDoesNotExistError:
             raise TSDBVarRangeError(timestamp)
 
-    def select(self, begin=None, end=None, flags=None):
+    def select(self, begin=0, end=(2**32-1), flags=None):
         """select data based on timestamp or flags.
 
         None is interpreted as "don't care"
