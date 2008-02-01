@@ -1,28 +1,27 @@
 """
-Prototype implementation of TSDB.
+TSDB -- Time Series Database
 
-All timestamps are seconds since the epoch in UTC
+TSDB is a database optimized for storing time series data.  Data is indexed by
+timestamp so that extracting a range of data requires a minimal number of disk
+movements.  TSDB breaks data into chunks which hold a configurable range of
+data points.  The full chunk is allocated on the first write in order to put
+consecutive data points in spatial locality on the disk.  (This of course is
+dependant on the underlying filesystem.)
 
-File structure:
+TSDB was designed to never discard data through summarization.  This means
+that unless the system implements a policy to expire old data it will remain
+around ad infinitum.  Disk is cheap and plentiful, therefore why would you
+want to lose data?
 
-    $ROOT/$set/$varname/$chunk
+Some general comments:
 
-    ROOT is the database root
-    set is the dataset, for example a router
-    varname is the variable collected
-    chunk is the database chunk, the default strategy is:
-        YYYY is four digit year (nevermind the year 10k issues)
-        MM is the two digit month
+ * All timestamps are seconds since the epoch in UTC
 
-    metadata file:
+Author: Jon M. Dugan <jdugan@es.net>
 
-    $ROOT/$set/$varname/metadata
-
-    EG:
-
-    $ROOT/snv1-mr1/ifInOctets.1/metadata
-    $ROOT/snv1-mr1/ifInOctets.1/200704
-
+Copyright (c) 2007, The Regents of the University of California, through                                 
+Lawrence Berkeley National Laboratory (subject to receipt of any required                                
+approvals from the U.S. Dept. of Energy).  All rights reserved. 
 
 >>> db = TSDB.create("tsdb_example")
 >>> set = db.add_set("example_set")
@@ -36,6 +35,7 @@ import time
 import calendar
 import warnings
 
+__version__ = ""
 
 os.environ['TZ'] = "UTC"
 time.tzset()
@@ -65,7 +65,10 @@ class TSDBNameInUseError(TSDBError):
     pass
 
 class TSDBRow(object):
-    """TSDBRows are fixed in size, each subclass defines the size"""
+    """A TSDBRow represents a datapoint inside a TSDBVar.
+
+    TSDBRows are fixed in size, each subclass defines the size."""
+
     type_id = 0
     version = 1
     pack_format = "!LL"
@@ -81,11 +84,11 @@ class TSDBRow(object):
         if type(self.value) == str:
             self.value = self._from_str(value)
 
-    def pack(self):
+    def pack(self, metadata):
         return struct.pack(self.pack_format, self.timestamp, self.flags, self.value)
 
     @classmethod
-    def unpack(klass, s):
+    def unpack(klass, s, metadata):
         return klass(*struct.unpack(klass.pack_format, s))
 
     def __str__(self):
@@ -179,11 +182,87 @@ class TimeTicks(TSDBRow):
     def _from_str(self, str):
         return int(str)
 
-#
-# XXX not sure we really need the flags
-# if timestamp is 0, the row is invalid
-# should we just handle wraps as we insert?
-#
+class Aggregate(TSDBRow):
+    """An Aggregate computes values based on raw data or a finer grained
+    aggregate.  An Aggregate is not an instantaneous value, but is computed
+    for some time interval.  This interval is stored as STEP in the metadata.
+
+    An Aggregate can be one of four types:
+
+        mean  - the mean value
+        min   - the minimum value
+        max   - the maximum value
+        delta - value at t_end - value at t_begin
+
+    The list of types for a given TSDBVar is stored in the AGGREGATES as comma
+    separated list.
+
+    The Aggregate TSDBRow has a variable size but all Aggregate rows in a
+    given TSDBVar are the same size.
+
+    Only the types listed in the TSDBVar metadata will be stored.  Note that
+    an Aggregate my have values for more aggregates than it stores.  What is
+    stored is dependent on the metadata passed in for the pack statement."""
+
+    aggregate_order = ('mean', 'min', 'max', 'delta')
+
+    def __init__(self, timestamp, flags, **kwargs):
+        self.timestamp = int(timestamp)
+        self.flags = flags
+        self.pack_format = TSDBRow.pack_format
+        
+        for agg in self.aggregate_order:
+            if kwargs.has_key(agg):
+                if kwargs[agg] is None:
+                    val = float('NaN')
+                else:
+                    val = float(kwargs[agg])
+
+                setattr(self, agg, v)
+
+        if type(self.value) == str:
+            self.value = self._from_str(value)
+
+    def _aggregate_list(self, metadata):
+        """Get an ordered list of the aggregates we are storing."""
+        l = metadata['TSDB_AGGREGATES'].split(',')
+        r = []
+        pack_format = ""
+        for agg in self.aggregate_order:
+            if agg in l:
+                r.append(agg)
+                pack_format += 'g'
+
+        self.pack_format = TSDBRow.pack_format + pack_format
+
+    def pack(self, metadata):
+        l = [getattr(self, agg) for agg in self._aggregate_list(metadata)]
+        return struct.pack(self.pack_format, self.timestamp, self.flags, *l)
+
+    @classmethod
+    def unpack(klass, s, metadata):
+        args = struct.unpack(klass.pack_format, s)
+        for agg in self._aggregate_list(metadata):
+            kwargs[agg] = args[2]
+            del args[2]
+
+        return klass(*args, **kwargs)
+
+    def __str__(self):
+        return "%s: [%d: %d/%d]" % (self.__class__.__name__, self.timestamp,
+                self.value, self.flags)
+
+    def __repr__(self):
+        return self.__str__()
+
+
+
+"""
+TSDB reserved bits 0-7 (the low 8 bits) of the flag field for globally defined flags. 
+Bits 8-15 are reserved for Row specific flags.  Bits 16-31 are for application
+specific uses.
+"""
+
 ROW_VALID   = 0x0001  # does this row have valid data?
 ROW_WRAP    = 0x0002  # was there a wrap between this entry and the previous
 ROW_UNWRAP  = 0x0004  # the wrap for this entry was corrected
@@ -478,6 +557,10 @@ class TSDB(TSDBBase):
 
 
 class TSDBSet(TSDBBase):
+    """A TSDBSet is used to organize TSDBVars into groups.
+
+    A TSDBSet has metadata but no actual data, it is a container for TSDBVars."""
+
     tag = "TSDBSet"
     metadata_map = {}
     def __init__(self, parent, path, metadata={}):
@@ -511,7 +594,12 @@ class TSDBSet(TSDBBase):
         warnings.warn("locking not implemented yet")
 
 class TSDBVar(TSDBBase):
-    """A variable in the database."""
+    """A TSDBVar represent a timeseries.
+
+    A TSDBVar is broken into TSDBVarChunks.
+
+    TSDBVars can be nested arbitrarily, but by convention the only TSDBVars
+    inside a TSDBVar are aggregates."""
 
     tag = "TSDBVar"
     metadata_map = {'STEP': int, 'TYPE_ID': int,
@@ -685,6 +773,9 @@ class TSDBVar(TSDBBase):
         warnings.warn("locking not implemented yet")
 
 class TSDBVarChunk(object):
+    """A TSDBVarChunk is a physical file containing a portion of the data for
+    a TSDBVar."""
+
     def __init__(self, tsdb_var, name, use_mmap=False):
         path = os.path.join(tsdb_var.path, name)
         if not os.path.exists(path):
@@ -740,21 +831,24 @@ class TSDBVarChunk(object):
     def write_record(self, data):
         if self.use_mmap:
             o = self._offset(data.timestamp)
-            self.mmap[o:o+self.tsdb_var.type.size] = data.pack()
+            self.mmap[o:o+self.tsdb_var.type.size] = data.pack(self.tsdb_var.metadata)
         else:
             self.io.seek(self._offset(data.timestamp))
-            return self.io.write(data.pack())
+            return self.io.write(data.pack(self.tsdb_var.metadata))
 
     def read_record(self, timestamp):
         if self.use_mmap:
             o = self._offset(timestamp)
-            return self.tsdb_var.type.unpack(self.mmap[o:o+self.tsdb_var.type.size])
+            return self.tsdb_var.type.unpack(self.mmap[o:o+self.tsdb_var.type.size],
+                    self.tsdb_var.metadata)
         else:
             self.io.seek(self._offset(timestamp))
-            return self.tsdb_var.type.unpack(self.io.read(self.tsdb_var.type.size))
+            return self.tsdb_var.type.unpack(self.io.read(self.tsdb_var.type.size),
+                    self.tsdb_var.metadata)
 
 def read_chunk(chunk, type):
     """Load the data in a chunk into a list."""
+    # XXX this doesn't work for Aggregates
     l = []
     f = open(chunk, "rb")
     while True:
