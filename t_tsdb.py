@@ -6,6 +6,9 @@ from tsdb import *
 
 TESTDB = "tsdb_test"
 
+# XXX add test for disjoint chunks
+# XXX add tests for min/max_timestamp for vars
+
 class TSDBTestCase(unittest.TestCase):
     def setUp(self):
         self.db = TSDB.create(TESTDB)
@@ -115,7 +118,7 @@ class TSDBVarTestCase(TSDBTestCase):
 
 class TestGetData(TSDBVarTestCase):
     def testGet(self):
-        self.assertRaises(TSDBVarChunkDoesNotExistError, self.v.get, 1)
+        self.assertRaises(TSDBVarEmpty, self.v.get, 1)
 
 class TestMetadata(TSDBVarTestCase):
     def testStep(self):
@@ -201,11 +204,14 @@ class TestData(TSDBTestCase):
 
     def testData(self):
         for t in TYPE_MAP[1:]:
+            if not hasattr(t, 'size'):
+                continue
             for m in CHUNK_MAPPER_MAP[1:]:
                 vname = "%s_%s" % (t,m)
                 var = self.db.add_var(vname, t, self.step, m)
                 name = m.name(self.ts)
                 begin = m.begin(name)
+                end = m.end(name)
                 size = m.size(name, t.size, self.step)
                 
                 r = range(0, (size/t.size) * self.step, self.step)
@@ -226,15 +232,13 @@ class TestData(TSDBTestCase):
                     if v.value != i:
                         raise "data bad at %s", str(i) + " " + str(begin+i) + " " + str(v)
 
-                low = begin-1
-                if m.name == m.name(low):
+                if m.name == m.name(begin-1):
                     raise "lower chunk boundary is incorrect"
 
-                high = begin + ((size/t.size)*self.step) + 1
-                if m.name == m.name(high):
+                if m.name == m.name(end+1):
                     raise "upper chunk boundary is incorrect"
 
-                for i in (low,high):
+                for i in (begin, end):
                     var.insert( t(i, ROW_VALID, i) )
                     if var.get(i).value != i:
                         raise "incorrect value at " + str(i)
