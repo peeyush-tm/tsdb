@@ -801,7 +801,10 @@ class TSDBVar(TSDBBase):
 
     def update_all_aggregates(self):
         """Update all aggregates for this TSDBVar."""
-        pass
+        weighted = [ (calculate_interval(x[1:]), x) for x in self.list_aggregates() ]
+        weighted.sort()
+        for _, agg in weighted:
+            self.update_aggregate(agg)
 
     def all_chunks(self):
         """Generate a sorted list of all chunks in this TSDBVar."""
@@ -810,6 +813,9 @@ class TSDBVar(TSDBBase):
             lambda x: x != self.tag and \
             not os.path.isdir(os.path.join(self.path,x)), os.listdir(self.path)\
         )
+        if not l:
+            raise TSDBVarEmpty("no chunks")
+
         l.sort()
         return l
 
@@ -849,8 +855,6 @@ class TSDBVar(TSDBBase):
         the minimum _valid_ timestamp."""
         if recalculate or not self.metadata.has_key('MIN_TIMESTAMP'):
             chunks = self.all_chunks()
-            if not chunks:
-                raise TSDBVarEmpty("no chunks")
 
             self.metadata['MIN_TIMESTAMP'] = self.chunk_mapper.begin(chunks[0])
             self.save_metadata() # XXX good idea?
@@ -864,8 +868,6 @@ class TSDBVar(TSDBBase):
         maximum _valid_ timestamp."""
         if recalculate or not self.metadata.has_key('MAX_TIMESTAMP'):
             chunks = self.all_chunks()
-            if not chunks:
-                raise TSDBVarEmpty
 
             self.metadata['MAX_TIMESTAMP'] = self.chunk_mapper.end(chunks[-1])
             self.save_metadata() # XXX good idea?
@@ -953,35 +955,31 @@ class TSDBVar(TSDBBase):
 
             while True:
                 try:
-                    d = var.get(current)
+                    row = var.get(current)
                 except TSDBVarRangeError:
                     chunks = self.all_chunks()
-                    try:
-                        chunk = self._chunk(d)
-                    except TSDBVarChunkDoesNotExistError:
-                        chunk = None
 
-                    if not chunks or \
-                       (chunk is not None and chunk.name == chunks[-1].name):
-                        # this is the last chunk we have, time to quit
+                    # looking for data beyond the end of recorded data so stop.
+                    
+                    if current > self.chunk_mapper.end(chunks[-1]):
                         raise StopIteration
 
-                    # otherwise generate a new empty chunk
-                    # this is inefficient for large gaps, but only once, there
-                    # should never be large gaps so this is ok
+                    # if we've found a gap in chunks, fill it in.
+                    # this is inefficient for large gaps, but only once.
+                    # there should never be large gaps so this is ok
 
-                    chunk = chunks[chunks.index(chunk.name)+1]
-                    current = self.chunk_mapper.begin(chunk)
+                    chunk = self._chunk(current, create=True)
+                    row = var.get(current)
 
                 valid = True
-                if flags is not None and d.flags & flags != flags:
+                if flags is not None and row.flags & flags != flags:
                     valid = False
     
                 if current > end:
                     raise StopIteration
 
                 if valid:
-                    yield d
+                    yield row
 
                 current += var.metadata['STEP']
 
@@ -1111,6 +1109,12 @@ class TSDBVarChunk(object):
             return self.tsdb_var.type.unpack(
                     self.io.read(self.tsdb_var.type.size),
                     self.tsdb_var.metadata)
+
+class Aggregator(object):
+    """Calculate Aggregates."""
+
+    def __init__(self, input, output):
+        pass
 
 def read_chunk(chunk, type):
     """Load the data in a chunk into a list."""

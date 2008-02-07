@@ -1,10 +1,11 @@
 import unittest
 import os
+import os.path
 import time
 
 from tsdb import *
 
-TESTDB = "tsdb_test"
+TESTDB = "testdb"
 
 # XXX add test for disjoint chunks
 # XXX add tests for min/max_timestamp for vars
@@ -203,6 +204,7 @@ class TestData(TSDBTestCase):
     step = 60
 
     def testData(self):
+        """Test moderate datasets with each TSDBRow subclass. (SLOW!)"""
         for t in TYPE_MAP[1:]:
             if not hasattr(t, 'size'):
                 continue
@@ -248,8 +250,76 @@ class TestData(TSDBTestCase):
                             self.step):
                         raise "chunk is wrong size at: " + str(i)
 
+class AggregatorSmokeTest(TSDBTestCase):
+    def setUp(self):
+        TSDBTestCase.setUp(self)
+        self.var = self.db.add_var("bar", Counter32, 60*60, YYYYMMDDChunkMapper)
+        for i in range(23):
+            self.var.insert(Counter32(i*60*60, ROW_VALID, i*5*60*60))
 
-        
+        self.var.add_aggregate("+1h", 60*60, YYYYMMDDChunkMapper, ['average','delta'])
+        self.var.add_aggregate("+6h", 6*60*60, YYYYMMChunkMapper,
+                ['average','delta','min','max'])
+
+        self.var.update_all_aggregates()
+
+    def testFileStructure(self):
+        """Do the aggregates get put in the right place?"""
+        path = os.path.join(self.var.path, "TSDBAggregates")
+        print path
+        self.assertTrue(os.path.isdir(path))
+        self.assertTrue(os.path.isdir(os.path.join(path, "+1h")))
+        self.assertTrue(os.path.isfile(os.path.join(path, "+1h", "TSDBVar")))
+        self.assertTrue(os.path.isdir(os.path.join(path, "+6h")))
+        self.assertTrue(os.path.isfile(os.path.join(path, "+6h", "TSDBVar")))
+
+    def testAggregatorAttributes(self):
+        """Make sure the size and pack attributes are created correctly."""
+
+        def check_agg(agg_name, aggs, size, pack_format):
+            agg = self.var.get_aggregate(agg_name)
+            val = agg.get(0)
+
+            self.assertTrue(size == val.size)
+            self.assertTrue(pack_format == val.pack_format)
+
+            for af in aggs:
+                self.assertTrue(hasattr(val, af))
+
+        check_agg("+1h", ["average", "delta"], 8 + 2*8, "!LLgg")
+        check_agg("+6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLgggg")
+
+    def testAggregatorAverage(self):
+        """Test the average aggregator.
+
+        The counter is incremented by 5*60*60 at each each step, so the
+        average should be 5 at each step."""
+
+        def test_constant_rate(agg_name, lo, hi, step, rate):
+            print agg_name, lo, hi, step, rate
+            agg = self.var.get_aggregate(agg_name)
+            for i in range(lo, hi):
+                self.assertEqual(rate, agg.get(i*step).average)
+
+        test_constant_rate("+1h", 1, 24, 3600, 5)
+        test_constant_rate("+6h", 1, 4, 6*3600, 5)
+
+    def testAggregatorDelta(self):
+        """Test the delta aggregator."""
+
+        def test_constant_delta(agg_name, lo, hi, step, delta):
+            print agg_name, lo, hi, step, delta
+            agg = self.var.get_aggregate(agg_name)
+            for i in range(lo, hi):
+                self.assertEqual(delta, agg.get(i*step))
+
+        test_constant_delta("+1h", 1, 24, 3600, 5*3600)
+        test_constant_delta("+6h", 1, 4, 6*3600, 6*3600)
+
+    def tearDown(self):
+        os.system("rm -rf %s.agg" % (TESTDB))
+        os.system("mv %s %s.agg" % (TESTDB, TESTDB))
+
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
     unittest.main()
