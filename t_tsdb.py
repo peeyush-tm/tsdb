@@ -141,6 +141,27 @@ class TestCaching(TSDBVarTestCase):
 
         self.assertEqual(len(v.chunks), 2)
 
+class TestBounds(TSDBVarTestCase):
+    def setUp(self):
+        TSDBVarTestCase.setUp(self)
+        self.ts = 36*3600
+        self.v.insert(Counter32(self.ts, ROW_VALID, 37))
+
+    def testBounds(self):
+        """Test that min and max timestamp functions."""
+        self.assertEqual(24*3600, self.v.min_timestamp())
+        self.assertEqual(48*3600-1, self.v.max_timestamp())
+        
+        self.assertEqual(self.ts, self.v.min_valid_timestamp())
+        self.assertEqual(self.ts, self.v.max_valid_timestamp())
+
+        self.v.insert(Counter32(self.ts + 24*3600, ROW_VALID, 37))
+        self.assertEqual(self.ts + 24*3600, self.v.max_valid_timestamp())
+
+        self.v.insert(Counter32(self.ts - 24*3600, ROW_VALID, 37))
+        self.assertEqual(self.ts - 24*3600, self.v.min_valid_timestamp())
+
+
 class TestChunkList(TSDBVarTestCase):
     def setUp(self):
         TSDBVarTestCase.setUp(self)
@@ -266,12 +287,14 @@ class AggregatorSmokeTest(TSDBTestCase):
     def testFileStructure(self):
         """Do the aggregates get put in the right place?"""
         path = os.path.join(self.var.path, "TSDBAggregates")
-        print path
         self.assertTrue(os.path.isdir(path))
         self.assertTrue(os.path.isdir(os.path.join(path, "+1h")))
         self.assertTrue(os.path.isfile(os.path.join(path, "+1h", "TSDBVar")))
         self.assertTrue(os.path.isdir(os.path.join(path, "+6h")))
         self.assertTrue(os.path.isfile(os.path.join(path, "+6h", "TSDBVar")))
+
+    def testListAggregates(self):
+        self.assertEqual(["+1h", "+6h"], self.var.list_aggregates())
 
     def testAggregatorAttributes(self):
         """Make sure the size and pack attributes are created correctly."""

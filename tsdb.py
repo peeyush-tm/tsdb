@@ -97,6 +97,7 @@ class TSDBRow(object):
     type_id = 0
     version = 1
     pack_format = "!LL"
+    can_rollover = False
 
     def __init__(self, timestamp, flags, value):
         if self.type_id == 0:
@@ -138,6 +139,10 @@ class TSDBRow(object):
         else:
             return NotImplemented
 
+    @classmethod
+    def rollover(klass, value):
+        raise NotImplementedError("not implemented in TSDBRow")
+
 class Counter32(TSDBRow):
     """Represent a SNMP Counter32 variable.
 
@@ -154,9 +159,14 @@ class Counter32(TSDBRow):
     version = 1
     pack_format = TSDBRow.pack_format + "L"
     size = 12
+    can_rollover = True
     
     def _from_str(self, str):
         return int(str)
+
+    @classmethod
+    def rollover(klass, value):
+        return value + 2**32
 
 class Counter64(TSDBRow):
     """Represent a SNMP Counter64 variable.
@@ -173,9 +183,14 @@ class Counter64(TSDBRow):
     version = 1
     pack_format = TSDBRow.pack_format + "Q"
     size = 16
+    can_rollover = True
 
     def _from_str(self, str):
         return long(str)
+
+    @classmethod
+    def rollover(klass, value):
+        return value + 2**64
 
 class Gauge32(TSDBRow):
     """Represent a SNMP Gauge32 variable.
@@ -597,11 +612,17 @@ class TSDBBase(object):
         return self.get_var(name)
 
     def list_aggregates(self):
-        """List existing aggregates."""
-        return filter(lambda x: \
-                TSDBVar.is_tsdb_var(
-                    os.path.join(self.path, "TSDBAggregates", x)),
+        """Sorted list of existing aggregates."""
+        def is_aggregate(x):
+            return TSDBVar.is_tsdb_var(
+                    os.path.join(self.path, "TSDBAggregates", x))
+
+        aggs = filter(is_aggregate,
                 os.listdir(os.path.join(self.path, "TSDBAggregates")))
+
+        weighted = [ (calculate_interval(x[1:]), x) for x in aggs ]
+        weighted.sort()
+        return [ x[1] for x in weighted ]
 
     def get_aggregate(self, name):
         """Get an existing aggregate."""
@@ -620,6 +641,9 @@ class TSDBBase(object):
 
         metadata['AGGREGATES'] = aggregates
         metadata['LAST_UPDATE'] = 0
+
+        if not metadata.has_key('VALID_RATIO']):
+            metadata['VALID_RATIO'] = 0.5
 
         try:
             aggset = self.get_set("TSDBAggregates")
@@ -740,7 +764,7 @@ class TSDBVar(TSDBBase):
     tag = "TSDBVar"
     metadata_map = {'STEP': int, 'TYPE_ID': int, 'MIN_TIMESTAMP': int,
             'VERSION': int, 'CHUNK_MAPPER_ID': int, 'AGGREGATES': list,
-            'LAST_UPDATE': int}
+            'LAST_UPDATE': int, 'VALID_RATIO': float}
 
     def __init__(self, parent, path, use_mmap=False, cache_chunks=False,
             metadata=None):
@@ -792,18 +816,22 @@ class TSDBVar(TSDBBase):
 
         write_dict(os.path.join(path, klass.tag), metadata)
 
+    def _get_aggregate_ancestor(self, agg_name):
+        agg_list = self.get_aggregates()
+        idx = agg_list.index(agg_name)
+        if idx > 0:
+            return self.get_aggregate(agg_list[idx-1])
+        else:
+            return self
 
     def update_aggregate(self, name):
         """Update the named aggreagate."""
-        agg = self.get_aggregate(name)
-        for x in self.select(begin=agg.metadata['LAST_UPDATE']):
-            print x
+        return Aggregator(self.get_aggregate(name),
+                self._get_aggregate_ancestor(name)).update()
 
     def update_all_aggregates(self):
         """Update all aggregates for this TSDBVar."""
-        weighted = [ (calculate_interval(x[1:]), x) for x in self.list_aggregates() ]
-        weighted.sort()
-        for _, agg in weighted:
+        for agg in self.list_aggregates():
             self.update_aggregate(agg)
 
     def all_chunks(self):
@@ -843,6 +871,8 @@ class TSDBVar(TSDBBase):
                     self.chunks[name] = \
                             TSDBVarChunk.create(self, name,
                                                 use_mmap=self.use_mmap)
+                    self.min_timestamp(recalculate=True)
+                    self.max_timestamp(recalculate=True)
                 else:
                     raise
 
@@ -888,7 +918,14 @@ class TSDBVar(TSDBBase):
 
     def max_valid_timestamp(self):
         """Finds the timestamp of the maximum valid row."""
-        pass
+        chunk = self._chunk(self.max_timestamp())
+        ts = self.metadata['MAX_TIMESTAMP']
+        while True:
+            row = chunk.read_row(ts)
+            if row.flags & ROW_VALID:
+                return row.timestamp
+
+            ts -= self.metadata['STEP']
 
     def get(self, timestamp):
         """Get the TSDBRow located at timestamp."""
@@ -995,6 +1032,22 @@ class TSDBVar(TSDBBase):
         Data should be a subclass of TSDBRow."""
         chunk = self._chunk(data.timestamp, create=True)
         return chunk.write_row(data)
+
+    def increase_delta(self, timestamp, value):
+        if not isinstance(self.type, Aggregate):
+            raise TSDBVarIsNotAggregate("not an Aggregate")
+
+        row = self.get(timestamp)
+        row.delta += value
+        row.flags |= ROW_VALID
+        self.insert(row)
+
+    def invalidate(self, timestamp):
+        """Remove the ROW_VALID flag from a row."""
+        row = self.get(timestamp)
+        if row.flags & ROW_VALID:
+            row.flags ^= ROW_VALID
+            self.insert(row)
 
     def flush(self):
         """Flush all the chunks for this TSDBVar to disk."""
@@ -1113,9 +1166,116 @@ class TSDBVarChunk(object):
 class Aggregator(object):
     """Calculate Aggregates."""
 
-    def __init__(self, input, output):
-        pass
+    def __init__(self, agg, ancestor):
+        self.agg = agg
+        self.ancestor = ancestor
 
+    def update(self):
+        if isinstance(self.ancestor.type, Aggregate):
+            self.update_from_aggregate()
+        else:
+            self.update_from_raw_data()
+
+    def update_from_raw_data(self):
+        """Update this aggregate from raw data.
+
+        The first aggregate MUST have the same step as the raw data.  (This
+        the only aggregate with a raw data ancestor.)
+
+        Scan all of the new data and bin it in the appropriate place.  At
+        either end a bin may have only partial data.  Detect and handle
+        rollovers."""
+
+        step = self.agg.metadata['STEP']
+        assert self.ancestor.metadata['STEP'] == step
+
+        last_update = self.agg.metadata['LAST_UPDATE'])
+       
+        prev = self.ancestor.get(last_update)
+
+        # XXX this only works for Counter types right now
+        for curr in self.ancestor.select(begin=last_update+step, flags=ROW_VALID):
+            delta_t = curr.timestamp - prev.timestamp
+            delta_v = curr.value - prev.value
+
+            if self.ancestor.can_rollover and delta_v < 0:
+                delta_v = self.ancestor.rollover(delta_v)
+
+            # allocate a portion of this data to a given bin
+            prev_slot = (prev.timestamp / step) * step
+            prev_frac = int(ceil(delta_v * (step - (prev.timestamp - prev_slot)) /
+                float(delta_t)))
+
+            curr_slot = (curr.timestamp / step) * step
+            curr_frac = int(ceil(delta_v * (curr.timestamp - curr_slot) /
+                float(delta_t)))
+
+            self.agg.increase_delta(curr_slot, curr_frac)
+            self.agg.increase_delta(curr_slot - step, prev_frac)
+
+            # if we have some left, try to backfill
+            if curr_frac + prev_frac != delta_v:
+                missed_slots = range(prev_slot+step, curr_slot, step)
+                if delta_t < self.agg.metadata['HEARTBEAT']:
+                    missed = delta_v - (curr_frac + prev_frac)
+                    missed_frac = missed / len(missed_slots)
+                    missed_rem = missed % (missed_frac * len(missed_slots))
+                    for slot in missed_slots:
+                        self.agg.increase_delta(slot, missed_frac)
+                    # distribute the remainder
+                    for i in range(missed_rem):
+                        self.agg.increase_delta(missed_slots[i], 1)
+                else:
+                    for slot in missed_slots:
+                        self.agg.invalidate_row(slot)
+
+            prev = curr
+
+        for row in self.agg.select(begin=last_update, flags=ROW_VALID):
+            row.average = float(row.delta) / step
+
+    # WHERE double check this function.  write tests.
+    def update_from_aggregate(self):
+        """Update this aggregate from another aggregate."""
+        step = self.agg.metadata['STEP']
+        steps_needed = step / self.ancestor.metadata['STEP']
+
+        last_update = self.agg.metadata['LAST_UPDATE']
+        work = self.ancestor.select(
+                begin=last_update + self.ancestor.metadata['STEP'])
+
+        while len(work) >= steps_needed:
+            data = work[:steps_needed]
+            work = work[steps_needed:]
+
+            slot = (work[0].timestamp / step) * step
+
+            assert work[-1].timestamp < slot + step
+
+            valid = 0
+            row = Aggregate(slot, ROW_VALID, delta=0, average=None,
+                    min=None, max=None)
+
+            for datum in work:
+                if datum.flags & ROW_VALID:
+                    valid += 1
+                    row.delta += datum
+    
+                    if not row.min or datum.value < row.min:
+                        min = datum.value
+    
+                    if not row.max or datum.value > row.max:
+                        max = datum.value
+   
+            valid_ratio = float(valid)/float(len(data))
+
+            if valid_ratio < self.agg.metadata['VALID_RATIO']:
+                self.agg.invalidate(slot)
+    
+            self.agg.insert(row)
+
+
+# FIXME These should be refactored into TSDBVarChunk
 def read_chunk(chunk, type):
     """Load the data in a chunk into a list."""
     # XXX this doesn't work for Aggregates
