@@ -227,7 +227,7 @@ class TestData(TSDBTestCase):
     def testData(self):
         """Test moderate datasets with each TSDBRow subclass. (SLOW!)"""
         for t in TYPE_MAP[1:]:
-            if not hasattr(t, 'size'):
+            if t == Aggregate:
                 continue
             for m in CHUNK_MAPPER_MAP[1:]:
                 vname = "%s_%s" % (t,m)
@@ -235,9 +235,9 @@ class TestData(TSDBTestCase):
                 name = m.name(self.ts)
                 begin = m.begin(name)
                 end = m.end(name)
-                size = m.size(name, t.size, self.step)
+                size = m.size(name, t.size({}), self.step)
                 
-                r = range(0, (size/t.size) * self.step, self.step)
+                r = range(0, (size/t.size({})) * self.step, self.step)
 
                 # write a full chunk of data
                 for i in r:
@@ -267,15 +267,15 @@ class TestData(TSDBTestCase):
                         raise "incorrect value at " + str(i)
 
                     f = os.path.join(TESTDB, vname, m.name(i))
-                    if os.stat(f).st_size != m.size(m.name(i), t.size,
+                    if os.stat(f).st_size != m.size(m.name(i), t.size({}),
                             self.step):
                         raise "chunk is wrong size at: " + str(i)
 
-class AggregatorSmokeTest(TSDBTestCase):
+class ZAggregatorSmokeTest(TSDBTestCase):
     def setUp(self):
         TSDBTestCase.setUp(self)
         self.var = self.db.add_var("bar", Counter32, 60*60, YYYYMMDDChunkMapper)
-        for i in range(23):
+        for i in range(24):
             self.var.insert(Counter32(i*60*60, ROW_VALID, i*5*60*60))
 
         self.var.add_aggregate("+1h", 60*60, YYYYMMDDChunkMapper, ['average','delta'])
@@ -303,14 +303,15 @@ class AggregatorSmokeTest(TSDBTestCase):
             agg = self.var.get_aggregate(agg_name)
             val = agg.get(0)
 
-            self.assertTrue(size == val.size)
-            self.assertTrue(pack_format == val.pack_format)
+            print size, val.size({'AGGREGATES': aggs}), val
+            self.assertTrue(size == val.size({'AGGREGATES': aggs}))
+            self.assertTrue(pack_format == val.get_pack_format({'AGGREGATES': aggs}))
 
             for af in aggs:
                 self.assertTrue(hasattr(val, af))
 
-        check_agg("+1h", ["average", "delta"], 8 + 2*8, "!LLgg")
-        check_agg("+6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLgggg")
+        check_agg("+1h", ["average", "delta"], 8 + 2*8, "!LLdd")
+        check_agg("+6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
 
     def testAggregatorAverage(self):
         """Test the average aggregator.
@@ -319,30 +320,79 @@ class AggregatorSmokeTest(TSDBTestCase):
         average should be 5 at each step."""
 
         def test_constant_rate(agg_name, lo, hi, step, rate):
-            print agg_name, lo, hi, step, rate
             agg = self.var.get_aggregate(agg_name)
+            print agg_name, agg, lo, hi, step, rate
             for i in range(lo, hi):
-                self.assertEqual(rate, agg.get(i*step).average)
+                print i * step, rate, agg.get(i * step).average
+                assert rate == (agg.get(i * step).average)
 
-        test_constant_rate("+1h", 1, 24, 3600, 5)
-        test_constant_rate("+6h", 1, 4, 6*3600, 5)
+        test_constant_rate("+1h", 1, 23, 3600, 5.0)
+        test_constant_rate("+6h", 1, 3, 6*3600, 5.)
+
+        # add test_zero_rate
 
     def testAggregatorDelta(self):
         """Test the delta aggregator."""
 
         def test_constant_delta(agg_name, lo, hi, step, delta):
-            print agg_name, lo, hi, step, delta
             agg = self.var.get_aggregate(agg_name)
+            print agg_name, lo, hi, step, delta
             for i in range(lo, hi):
-                self.assertEqual(delta, agg.get(i*step))
+                print delta, agg.get(i * step).delta
+                self.assertEqual(delta, agg.get(i * step).delta)
 
-        test_constant_delta("+1h", 1, 24, 3600, 5*3600)
-        test_constant_delta("+6h", 1, 4, 6*3600, 6*3600)
+        test_constant_delta("+1h", 1, 23, 3600, 5*3600)
+        test_constant_delta("+6h", 1, 3, 6*3600, 5*6*3600)
 
     def tearDown(self):
         os.system("rm -rf %s.agg" % (TESTDB))
+        print "hithere"
         os.system("mv %s %s.agg" % (TESTDB, TESTDB))
 
+class TestTSDBRows(unittest.TestCase):
+    def testSizes(self):
+        """Make sure we are computing the size of rows correctly."""
+        assert TSDBRow.size({}) == 8
+        assert Counter32.size({}) == 12
+        assert Counter64.size({}) == 16
+        assert TimeTicks.size({}) == 12
+        assert Gauge32.size({}) == 12
+
+        assert Aggregate.size(
+                {'AGGREGATES': ['average']}) == 16
+        assert Aggregate.size(
+                {'AGGREGATES': ['average','delta']}) == 24
+        assert Aggregate.size(
+                {'AGGREGATES': ['average','delta','min']}) == 32
+        assert Aggregate.size(
+                {'AGGREGATES': ['average','delta','min','max']}) == 40
+
+        assert Aggregate.get_pack_format(
+                {'AGGREGATES': ['average']}) == "!LLd"
+        assert Aggregate.get_pack_format(
+                {'AGGREGATES': ['average','delta']}) == "!LLdd"
+        assert Aggregate.get_pack_format(
+                {'AGGREGATES': ['average','delta','min']}) == "!LLddd"
+        assert Aggregate.get_pack_format(
+                {'AGGREGATES': ['average','delta','min','max']}) == "!LLdddd"
+
+    def testRows(self):
+        """Test that we get back what we put in."""
+        for r in (Counter32, Counter64, TimeTicks, Gauge32):
+            row = r(1,1,1)
+            assert row == r.unpack(row.pack({}), {})
+
+    def testAggregate(self):
+        """Test that we get back what we put in for Aggregates."""
+        m = {'AGGREGATES': ['average','delta','min','max']}
+        agg0 = Aggregate(1, 1, average=1, delta=2, min=3, max=4)
+        print agg0
+        agg1 = Aggregate.unpack(agg0.pack(m), m)
+        print agg1
+        assert agg0 == agg1
+
+
+        
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
     unittest.main()
