@@ -271,7 +271,11 @@ class TestData(TSDBTestCase):
                             self.step):
                         raise "chunk is wrong size at: " + str(i)
 
-class ZAggregatorSmokeTest(TSDBTestCase):
+class TestNoAggregates(TSDBVarTestCase):
+    def testNoAggregates(self):
+        assert self.v.list_aggregates() == []
+
+class AggregatorSmokeTest(TSDBTestCase):
     def setUp(self):
         TSDBTestCase.setUp(self)
         self.var = self.db.add_var("bar", Counter32, 60*60, YYYYMMDDChunkMapper)
@@ -391,7 +395,54 @@ class TestTSDBRows(unittest.TestCase):
         print agg1
         assert agg0 == agg1
 
+class TestNonDecreasing(TSDBTestCase):
+    def testReset(self):
+        for rtype in (Counter32, Counter64):
+            varname = "test_%s" % (rtype.__name__)
+            t = self.db.add_var(varname, rtype, 60, YYYYMMDDChunkMapper)
+            t.insert(rtype(1, ROW_VALID, 100))
+            t.insert(rtype(60, ROW_VALID, 60))
+            t.flush()
 
+            u = self.db.add_var(varname + "_uptime", TimeTicks, 60,
+                    YYYYMMDDChunkMapper)
+            u.insert(TimeTicks(1, ROW_VALID, 100))
+            u.insert(TimeTicks(60, ROW_VALID, 1))
+
+            t.add_aggregate("+60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
+            t.update_all_aggregates(uptime_var=u)
+            a = t.get_aggregate('+60s')
+            print a.get(1).delta
+
+            assert a.get(1).delta == 60
+
+    def testRollover(self):
+        print "ROLLIN"
+        for rtype, maxval in (
+                (Counter32, 4294963596),
+                (Counter64, 18446744073709547916)):
+            varname = "test_%s" % (rtype.__name__)
+            t = self.db.add_var(varname, rtype, 60, YYYYMMDDChunkMapper)
+            t.insert(rtype(0, ROW_VALID, maxval))
+            t.insert(rtype(60, ROW_VALID, 37))
+            t.flush()
+            print t
+
+            u = self.db.add_var(varname + "_uptime", TimeTicks, 60,
+                    YYYYMMDDChunkMapper)
+            u.insert(TimeTicks(0, ROW_VALID, 100))
+            u.insert(TimeTicks(60, ROW_VALID, 6100))
+            print u
+
+            t.add_aggregate("+60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
+            t.update_all_aggregates(uptime_var=u)
+            a = t.get_aggregate('+60s')
+            print a.get(1).delta
+            assert a.get(1).delta == 3737
+
+    def tearDown(self):
+        os.system("rm -rf %s.nd" % (TESTDB))
+        os.system("mv %s %s.nd" % (TESTDB, TESTDB))
         
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"

@@ -16,6 +16,7 @@ want to lose data?
 Some general comments:
 
  * All timestamps are seconds since the epoch in UTC
+ * All data is stored in network byte order
 
 Author: Jon M. Dugan <jdugan@es.net>
 
@@ -65,6 +66,10 @@ class TSDBSetDoesNotExistError(TSDBError):
     pass
 
 class TSDBVarDoesNotExistError(TSDBError):
+    """The requested TSDBVar does not exist."""
+    pass
+
+class TSDBAggregateDoesNotExistError(TSDBError):
     """The requested TSDBVar does not exist."""
     pass
 
@@ -153,6 +158,8 @@ class TSDBRow(object):
     @classmethod
     def rollover(klass, value):
         raise NotImplementedError("not implemented in TSDBRow")
+
+
 
 class Counter32(TSDBRow):
     """Represent a SNMP Counter32 variable.
@@ -337,7 +344,7 @@ class Aggregate(TSDBRow):
             return NotImplemented
 
 """
-TSDB reserved bits 0-7 (the low 8 bits) of the flag field for globally defined flags. 
+TSDB reserves bits 0-7 (the low 8 bits) of the flag field for globally defined flags. 
 Bits 8-15 are reserved for Row specific flags.  Bits 16-31 are for application
 specific uses.
 """
@@ -644,6 +651,10 @@ class TSDBBase(object):
 
     def list_aggregates(self):
         """Sorted list of existing aggregates."""
+
+        if not TSDBSet.is_tsdb_set(os.path.join(self.path, "TSDBAggregates")):
+            return []
+
         def is_aggregate(x):
             return TSDBVar.is_tsdb_var(
                     os.path.join(self.path, "TSDBAggregates", x))
@@ -657,7 +668,15 @@ class TSDBBase(object):
 
     def get_aggregate(self, name):
         """Get an existing aggregate."""
-        return self.get_set("TSDBAggregates").get_var(name)
+        try:
+           set = self.get_set("TSDBAggregates")
+        except TSDBSetDoesNotExistError:
+            raise TSDBAggregateDoesNotExistError(name)
+
+        try:
+            agg = set.get_var(name)
+        except TSDBVarDoesNotExistError:
+            raise TSDBAggregateDoesNotExistError(name)
 
     def add_aggregate(self, name, step, chunk_mapper, aggregates,
             metadata=None):
@@ -746,11 +765,10 @@ class TSDBSet(TSDBBase):
         self.path = path
         self.parent = parent
 
-        if not os.path.exists(path):
+        if not os.path.exists(path) or not self.is_tsdb_set(path):
             raise TSDBSetDoesNotExistError("TSDBSet does not exist " + path)
 
         self.load_metadata()
-
 
     @classmethod
     def is_tsdb_set(klass, path):
@@ -802,7 +820,7 @@ class TSDBVar(TSDBBase):
         """Load the TSDBVar at path."""
         TSDBBase.__init__(self)
 
-        if not os.path.exists(path):
+        if not os.path.exists(path) or not self.is_tsdb_var(path):
             raise TSDBVarDoesNotExistError("TSDBVar does not exist:" + path)
 
         self.parent = parent
@@ -855,15 +873,15 @@ class TSDBVar(TSDBBase):
         else:
             return self
 
-    def update_aggregate(self, name):
+    def update_aggregate(self, name, uptime_var=None):
         """Update the named aggreagate."""
         return Aggregator(self.get_aggregate(name),
-                self._get_aggregate_ancestor(name)).update()
+                self._get_aggregate_ancestor(name)).update(uptime_var=uptime_var)
 
-    def update_all_aggregates(self):
+    def update_all_aggregates(self, uptime_var=None):
         """Update all aggregates for this TSDBVar."""
         for agg in self.list_aggregates():
-            self.update_aggregate(agg)
+            self.update_aggregate(agg, uptime_var=uptime_var)
 
     def all_chunks(self):
         """Generate a sorted list of all chunks in this TSDBVar."""
@@ -1206,21 +1224,26 @@ class TSDBVarChunk(object):
                     self.tsdb_var.metadata)
 
 class Aggregator(object):
-    """Calculate Aggregates."""
+    """Calculate Aggregates.
+    
+    XXX ultimately there should be an aggregator for each class of TSDBVars.
+    This one is really targeted at Counters and should become
+    CounterAggregator.  It should be possible to generalize some of this
+    functionality into a base Aggregator class though."""
 
     def __init__(self, agg, ancestor):
         self.agg = agg
         self.ancestor = ancestor
 
-    def update(self):
+    def update(self, uptime_var=None):
         if self.ancestor.type == Aggregate:
             self.update_from_aggregate()
         else:
-            self.update_from_raw_data()
+            self.update_from_raw_data(uptime_var=uptime_var)
 
         self.agg.flush()
 
-    def update_from_raw_data(self):
+    def update_from_raw_data(self, uptime_var=None):
         """Update this aggregate from raw data.
 
         The first aggregate MUST have the same step as the raw data.  (This
@@ -1247,13 +1270,19 @@ class Aggregator(object):
             delta_t = curr.timestamp - prev.timestamp
             delta_v = curr.value - prev.value
 
-            assert delta_v >= 0
-            # WHERE this assertion should be past the rollover check, but the
-            # rollover check needs to also determine when the counter has been
-            # reset.  add more rigorous tests for the Aggregator
-
             if self.ancestor.type.can_rollover and delta_v < 0:
-                delta_v = self.ancestor.rollover(delta_v)
+                assert uptime_var is not None 
+                delta_uptime = uptime_var.get(curr.timestamp).value - \
+                        uptime_var.get(prev.timestamp).value
+
+                if delta_uptime < 0:
+                    # this is a reset
+                    delta_v = curr.value
+                else:
+                    delta_v = self.ancestor.type.rollover(delta_v)
+
+
+            assert delta_v >= 0
 
             # allocate a portion of this data to a given bin
             prev_slot = (prev.timestamp / step) * step
