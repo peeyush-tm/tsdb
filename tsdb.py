@@ -678,6 +678,8 @@ class TSDBBase(object):
         except TSDBVarDoesNotExistError:
             raise TSDBAggregateDoesNotExistError(name)
 
+        return agg
+
     def add_aggregate(self, name, step, chunk_mapper, aggregates,
             metadata=None):
         """Add an aggregate at the current level.
