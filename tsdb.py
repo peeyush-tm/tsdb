@@ -1395,6 +1395,16 @@ def print_chunk(l, check_valid=True):
         if not check_valid or v.flags & ROW_VALID == 1:
             print v
 
+INTERVAL_SCALARS = {
+    's': 1,
+    'm': 60,
+    'h': 60*60,
+    'd': 60*60*24,
+    'w': 60*60*24*7
+}
+
+INTERVAL_RE = re.compile('^\+(\d+)(%s)?$' % ('|'.join(INTERVAL_SCALARS.keys())))
+
 def calculate_interval(s):
     """
     Expand intervals expressed as nI, where I is one of:
@@ -1402,29 +1412,24 @@ def calculate_interval(s):
         s: seconds
         m: minutes
         h: hours
-        D: days (24 hours)
-        W: weeks (7 days)
+        d: days (24 hours)
+        w: weeks (7 days)
 
     """
 
-    m = re.search('(\d+)(s|m|h|D|W)', s)
+    m = INTERVAL_RE.search(s)
     if not m:
-        raise InvalidInterval
+        raise InvalidInterval("No match: %s" % s)
 
     n = int(m.group(1))
-    I = m.group(2)
+    if n < 0:
+        raise InvalidInterval("Negative interval: %s" % s)
 
-    if I == 'm':
-        n *= 60
-    elif I == 'h':
-        n *= 60*60
-    elif I == 'D':
-        n *= 24*60*60
-    elif I == 'W':
-        n *= 7*24*60*60
+    scalar = m.group(2)
+    if scalar is not None:
+        n *= INTERVAL_SCALARS[scalar]
 
     return n
-
 
 def _test():
     """

@@ -2,10 +2,16 @@ import unittest
 import os
 import os.path
 import time
+import random
+
+import nose.tools
 
 from tsdb import *
 
 TESTDB = "testdb"
+
+def setup():
+    os.system("rm -rf %s" % TESTDB)
 
 # XXX add test for disjoint chunks
 # XXX add tests for min/max_timestamp for vars
@@ -223,6 +229,7 @@ class TestSelect(TSDBVarTestCase):
 class TestData(TSDBTestCase):
     ts = 1184863723
     step = 60
+    slow = True
 
     def testData(self):
         """Test moderate datasets with each TSDBRow subclass. (SLOW!)"""
@@ -278,13 +285,27 @@ class TestNoAggregates(TSDBVarTestCase):
 class AggregatorSmokeTest(TSDBTestCase):
     def setUp(self):
         TSDBTestCase.setUp(self)
-        self.var = self.db.add_var("bar", Counter32, 60*60, YYYYMMDDChunkMapper)
-        for i in range(24):
-            self.var.insert(Counter32(i*60*60, ROW_VALID, i*5*60*60))
+        self.vars = (("foo", 0), ("bar", 5))
 
-        self.var.add_aggregate("+1h", 60*60, YYYYMMDDChunkMapper, ['average','delta'])
-        self.var.add_aggregate("+6h", 6*60*60, YYYYMMChunkMapper,
-                ['average','delta','min','max'])
+        for var, rate in self.vars:
+            self.build_constant_rate(var, rate)
+
+    def build_constant_rate(self, name, rate=5, step="+1h",
+            mapper=YYYYMMDDChunkMapper, aggs=["+6h"],
+            calc_aggs=['average','delta','min','max'],
+            rtype=Counter32):
+        """Build up constant rate data.
+        This method automatically builds an aggregate equal to the step size.
+        Step can be expressed as a string"""
+
+        nstep = calculate_interval(step)
+        self.var = self.db.add_var(name, rtype, 60*60, mapper)
+        for i in range(24):
+            self.var.insert(rtype(i * nstep, ROW_VALID, i * rate * nstep))
+
+        self.var.add_aggregate(step, nstep, mapper, ['average','delta'])
+        for agg in aggs:
+            self.var.add_aggregate(agg, calculate_interval(agg), mapper, calc_aggs) 
 
         self.var.update_all_aggregates()
 
@@ -303,8 +324,8 @@ class AggregatorSmokeTest(TSDBTestCase):
     def testAggregatorAttributes(self):
         """Make sure the size and pack attributes are created correctly."""
 
-        def check_agg(agg_name, aggs, size, pack_format):
-            agg = self.var.get_aggregate(agg_name)
+        def check_agg(var, agg_name, aggs, size, pack_format):
+            agg = self.db.get_var(var).get_aggregate(agg_name)
             val = agg.get(0)
 
             print size, val.size({'AGGREGATES': aggs}), val
@@ -314,8 +335,9 @@ class AggregatorSmokeTest(TSDBTestCase):
             for af in aggs:
                 self.assertTrue(hasattr(val, af))
 
-        check_agg("+1h", ["average", "delta"], 8 + 2*8, "!LLdd")
-        check_agg("+6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
+        for var in ("foo", "bar"):
+            check_agg(var, "+1h", ["average", "delta"], 8 + 2*8, "!LLdd")
+            check_agg(var, "+6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
 
     def testAggregatorAverage(self):
         """Test the average aggregator.
@@ -323,34 +345,33 @@ class AggregatorSmokeTest(TSDBTestCase):
         The counter is incremented by 5*60*60 at each each step, so the
         average should be 5 at each step."""
 
-        def test_constant_rate(agg_name, lo, hi, step, rate):
-            agg = self.var.get_aggregate(agg_name)
+        def test_constant_rate(var, rate, agg_name, lo, hi, step):
+            agg = self.db.get_var(var).get_aggregate(agg_name)
             print agg_name, agg, lo, hi, step, rate
             for i in range(lo, hi):
                 print i * step, rate, agg.get(i * step).average
                 assert rate == (agg.get(i * step).average)
 
-        test_constant_rate("+1h", 1, 23, 3600, 5.0)
-        test_constant_rate("+6h", 1, 3, 6*3600, 5.)
-
-        # add test_zero_rate
+        for var, rate in self.vars:
+            test_constant_rate(var, float(rate), "+1h", 1, 23, 3600)
+            test_constant_rate(var, float(rate), "+6h", 1, 3, 6*3600)
 
     def testAggregatorDelta(self):
         """Test the delta aggregator."""
 
-        def test_constant_delta(agg_name, lo, hi, step, delta):
-            agg = self.var.get_aggregate(agg_name)
+        def test_constant_delta(var, agg_name, lo, hi, step, delta):
+            agg = self.db.get_var(var).get_aggregate(agg_name)
             print agg_name, lo, hi, step, delta
             for i in range(lo, hi):
                 print delta, agg.get(i * step).delta
                 self.assertEqual(delta, agg.get(i * step).delta)
 
-        test_constant_delta("+1h", 1, 23, 3600, 5*3600)
-        test_constant_delta("+6h", 1, 3, 6*3600, 5*6*3600)
+        for var, rate in self.vars:
+            test_constant_delta(var, "+1h", 1, 23, 3600, rate*3600)
+            test_constant_delta(var, "+6h", 1, 3, 6*3600, rate*6*3600)
 
     def tearDown(self):
         os.system("rm -rf %s.agg" % (TESTDB))
-        print "hithere"
         os.system("mv %s %s.agg" % (TESTDB, TESTDB))
 
 class TestTSDBRows(unittest.TestCase):
@@ -417,7 +438,6 @@ class TestNonDecreasing(TSDBTestCase):
             assert a.get(1).delta == 60
 
     def testRollover(self):
-        print "ROLLIN"
         for rtype, maxval in (
                 (Counter32, 4294963596),
                 (Counter64, 18446744073709547916)):
@@ -440,10 +460,26 @@ class TestNonDecreasing(TSDBTestCase):
             print a.get(1).delta
             assert a.get(1).delta == 3737
 
+
     def tearDown(self):
         os.system("rm -rf %s.nd" % (TESTDB))
         os.system("mv %s %s.nd" % (TESTDB, TESTDB))
-        
+    
+def test_calculate_interval():
+    for (x,y) in (("+1s", 1), ("+37s", 37), ("+1m", 60), ("+37m", 37*60),
+            ("+1h", 60*60), ("+37h", 37*60*60), ("+1d", 24*60*60),
+            ("+37d", 37*24*60*60), ("+1w", 7*24*60*60),
+            ("+37w", 37*7*24*60*60)):
+        assert calculate_interval(x) == y
+
+    @nose.tools.raises(InvalidInterval)
+    def exception_test(arg):
+        calculate_interval(arg)
+
+    for arg in ("-99", "99p"):
+        print "IntervalError:", arg
+        exception_test(arg)
+
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
     unittest.main()
