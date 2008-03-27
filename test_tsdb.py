@@ -5,6 +5,9 @@ import time
 import random
 
 import nose.tools
+import figleaf
+
+figleaf.start()
 
 from tsdb import *
 
@@ -125,7 +128,7 @@ class TSDBVarTestCase(TSDBTestCase):
 
 class TestGetData(TSDBVarTestCase):
     def testGet(self):
-        self.assertRaises(TSDBVarEmpty, self.v.get, 1)
+        self.assertRaises(TSDBVarRangeError, self.v.get, 1)
 
 class TestMetadata(TSDBVarTestCase):
     def testStep(self):
@@ -290,8 +293,8 @@ class AggregatorSmokeTest(TSDBTestCase):
         for var, rate in self.vars:
             self.build_constant_rate(var, rate)
 
-    def build_constant_rate(self, name, rate=5, step="+1h",
-            mapper=YYYYMMDDChunkMapper, aggs=["+6h"],
+    def build_constant_rate(self, name, rate=5, step="1h",
+            mapper=YYYYMMDDChunkMapper, aggs=["6h"],
             calc_aggs=['average','delta','min','max'],
             rtype=Counter32):
         """Build up constant rate data.
@@ -313,13 +316,15 @@ class AggregatorSmokeTest(TSDBTestCase):
         """Do the aggregates get put in the right place?"""
         path = os.path.join(self.var.path, "TSDBAggregates")
         self.assertTrue(os.path.isdir(path))
-        self.assertTrue(os.path.isdir(os.path.join(path, "+1h")))
-        self.assertTrue(os.path.isfile(os.path.join(path, "+1h", "TSDBVar")))
-        self.assertTrue(os.path.isdir(os.path.join(path, "+6h")))
-        self.assertTrue(os.path.isfile(os.path.join(path, "+6h", "TSDBVar")))
+        hour_1 = 60 * 60
+        self.assertTrue(os.path.isdir(os.path.join(path, str(hour_1))))
+        self.assertTrue(os.path.isfile(os.path.join(path, str(hour_1), "TSDBVar")))
+        hour_6 = 6 * hour_1
+        self.assertTrue(os.path.isdir(os.path.join(path, str(hour_6))))
+        self.assertTrue(os.path.isfile(os.path.join(path, str(hour_6), "TSDBVar")))
 
     def testListAggregates(self):
-        self.assertEqual(["+1h", "+6h"], self.var.list_aggregates())
+        self.assertEqual([str(60*60), str(6*60*60)], self.var.list_aggregates())
 
     def testAggregatorAttributes(self):
         """Make sure the size and pack attributes are created correctly."""
@@ -336,8 +341,8 @@ class AggregatorSmokeTest(TSDBTestCase):
                 self.assertTrue(hasattr(val, af))
 
         for var in ("foo", "bar"):
-            check_agg(var, "+1h", ["average", "delta"], 8 + 2*8, "!LLdd")
-            check_agg(var, "+6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
+            check_agg(var, "1h", ["average", "delta"], 8 + 2*8, "!LLdd")
+            check_agg(var, "6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
 
     def testAggregatorAverage(self):
         """Test the average aggregator.
@@ -353,8 +358,8 @@ class AggregatorSmokeTest(TSDBTestCase):
                 assert rate == (agg.get(i * step).average)
 
         for var, rate in self.vars:
-            test_constant_rate(var, float(rate), "+1h", 1, 23, 3600)
-            test_constant_rate(var, float(rate), "+6h", 1, 3, 6*3600)
+            test_constant_rate(var, float(rate), "1h", 1, 23, 3600)
+            test_constant_rate(var, float(rate), "6h", 1, 3, 6*3600)
 
     def testAggregatorDelta(self):
         """Test the delta aggregator."""
@@ -367,8 +372,14 @@ class AggregatorSmokeTest(TSDBTestCase):
                 self.assertEqual(delta, agg.get(i * step).delta)
 
         for var, rate in self.vars:
-            test_constant_delta(var, "+1h", 1, 23, 3600, rate*3600)
-            test_constant_delta(var, "+6h", 1, 3, 6*3600, rate*6*3600)
+            test_constant_delta(var, "1h", 1, 23, 3600, rate*3600)
+            test_constant_delta(var, "6h", 1, 3, 6*3600, rate*6*3600)
+
+    def testStartOnBoundary(self):
+        """Test the edge case where an aggregate starts on a boundary.
+        For example if Agg A is 10 seconds wide and Agg B is 30 seconds wide
+        see what happens if the first datapoint in A is at 30."""
+        pass
 
     def tearDown(self):
         os.system("rm -rf %s.agg" % (TESTDB))
@@ -430,9 +441,9 @@ class TestNonDecreasing(TSDBTestCase):
             u.insert(TimeTicks(1, ROW_VALID, 100))
             u.insert(TimeTicks(60, ROW_VALID, 1))
 
-            t.add_aggregate("+60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
+            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
             t.update_all_aggregates(uptime_var=u)
-            a = t.get_aggregate('+60s')
+            a = t.get_aggregate('60s')
             print a.get(1).delta
 
             assert a.get(1).delta == 60
@@ -454,9 +465,9 @@ class TestNonDecreasing(TSDBTestCase):
             u.insert(TimeTicks(60, ROW_VALID, 6100))
             print u
 
-            t.add_aggregate("+60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
+            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
             t.update_all_aggregates(uptime_var=u)
-            a = t.get_aggregate('+60s')
+            a = t.get_aggregate('60s')
             print a.get(1).delta
             assert a.get(1).delta == 3737
 
@@ -464,12 +475,27 @@ class TestNonDecreasing(TSDBTestCase):
     def tearDown(self):
         os.system("rm -rf %s.nd" % (TESTDB))
         os.system("mv %s %s.nd" % (TESTDB, TESTDB))
-    
+#
+# STATE: add tests for gaps
+# 
+def test_against_rrd():
+    """
+        rrdtool.create(rrd_file,
+           "--start", str(start_time),
+           "--step", "%d" % interval_time,
+           "DS:in:COUNTER:%d:0:U" % (interval_time * 2) ,
+           "DS:out:COUNTER:%d:0:U" % (interval_time * 2),
+           "RRA:AVERAGE:0.5:1:%d" % (num_data_points),
+           "RRA:MAX:0.5:1:%d" % (num_data_points),
+           "RRA:LAST:0.5:1:%d" % (num_data_points))
+    """
+    pass
+
 def test_calculate_interval():
-    for (x,y) in (("+1s", 1), ("+37s", 37), ("+1m", 60), ("+37m", 37*60),
-            ("+1h", 60*60), ("+37h", 37*60*60), ("+1d", 24*60*60),
-            ("+37d", 37*24*60*60), ("+1w", 7*24*60*60),
-            ("+37w", 37*7*24*60*60)):
+    for (x,y) in (("1s", 1), ("37s", 37), ("1m", 60), ("37m", 37*60),
+            ("1h", 60*60), ("37h", 37*60*60), ("1d", 24*60*60),
+            ("37d", 37*24*60*60), ("1w", 7*24*60*60),
+            ("37w", 37*7*24*60*60), ("1", 1), ("37", 37)):
         assert calculate_interval(x) == y
 
     @nose.tools.raises(InvalidInterval)
@@ -480,6 +506,9 @@ def test_calculate_interval():
         print "IntervalError:", arg
         exception_test(arg)
 
+def teardown():
+    figleaf.stop()
+    figleaf.write_coverage(".figleaf")
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
     unittest.main()

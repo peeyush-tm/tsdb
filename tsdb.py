@@ -20,7 +20,7 @@ Some general comments:
 
 Author: Jon M. Dugan <jdugan@es.net>
 
-Copyright (c) 2007, The Regents of the University of California, through
+Copyright (c) 2007-2008, The Regents of the University of California, through
 Lawrence Berkeley National Laboratory (subject to receipt of any required
 approvals from the U.S. Dept. of Energy).  All rights reserved. 
 
@@ -40,6 +40,8 @@ import re
 import itertools
 
 from math import floor, ceil
+
+from fpconst import isNaN
 
 __version__ = ""
 
@@ -159,7 +161,8 @@ class TSDBRow(object):
     def rollover(klass, value):
         raise NotImplementedError("not implemented in TSDBRow")
 
-
+    def invalidate(self):
+        self.flags &= ~ROW_VALID
 
 class Counter32(TSDBRow):
     """Represent a SNMP Counter32 variable.
@@ -662,7 +665,7 @@ class TSDBBase(object):
         aggs = filter(is_aggregate,
                 os.listdir(os.path.join(self.path, "TSDBAggregates")))
 
-        weighted = [ (calculate_interval(x[1:]), x) for x in aggs ]
+        weighted = [ (calculate_interval(x), x) for x in aggs ]
         weighted.sort()
         return [ x[1] for x in weighted ]
 
@@ -673,6 +676,7 @@ class TSDBBase(object):
         except TSDBSetDoesNotExistError:
             raise TSDBAggregateDoesNotExistError(name)
 
+        name = str(calculate_interval(name))
         try:
             agg = set.get_var(name)
         except TSDBVarDoesNotExistError:
@@ -702,6 +706,7 @@ class TSDBBase(object):
         except:
             aggset = self.add_set("TSDBAggregates")
 
+        name = str(calculate_interval(name))
         return aggset.add_var(name, Aggregate, step, chunk_mapper, metadata)
 
     @classmethod
@@ -814,8 +819,8 @@ class TSDBVar(TSDBBase):
 
     tag = "TSDBVar"
     metadata_map = {'STEP': int, 'TYPE_ID': int, 'MIN_TIMESTAMP': int,
-            'VERSION': int, 'CHUNK_MAPPER_ID': int, 'AGGREGATES': list,
-            'LAST_UPDATE': int, 'VALID_RATIO': float}
+            'MAX_TIMESTAMP': int, 'VERSION': int, 'CHUNK_MAPPER_ID': int,
+            'AGGREGATES': list, 'LAST_UPDATE': int, 'VALID_RATIO': float}
 
     def __init__(self, parent, path, use_mmap=False, cache_chunks=False,
             metadata=None):
@@ -956,7 +961,6 @@ class TSDBVar(TSDBBase):
 
             self.metadata['MAX_TIMESTAMP'] = self.chunk_mapper.end(chunks[-1])
             self.save_metadata() # XXX good idea?
-            print "MAX:", chunks[-1], self.metadata['MAX_TIMESTAMP'], chunks
 
         return self.metadata['MAX_TIMESTAMP']
 
@@ -986,15 +990,18 @@ class TSDBVar(TSDBBase):
     def get(self, timestamp):
         """Get the TSDBRow located at timestamp."""
         timestamp = int(timestamp)
-        if timestamp < self.min_timestamp():
-            raise TSDBVarRangeError(
-                    "%d is less the the minimum timestamp %d" % (timestamp,
-                        self.min_timestamp()))
+        try:
+            if timestamp < self.min_timestamp():
+                raise TSDBVarRangeError(
+                        "%d is less the the minimum timestamp %d" % (timestamp,
+                            self.min_timestamp()))
 
-        if timestamp > self.max_timestamp():
-            raise TSDBVarRangeError(
-                    "%d is greater the the maximum timestamp %d" % (timestamp,
-                        self.max_timestamp()))
+            if timestamp > self.max_timestamp():
+                raise TSDBVarRangeError(
+                        "%d is greater the the maximum timestamp %d" % (timestamp,
+                            self.max_timestamp()))
+        except TSDBVarEmpty:
+            raise TSDBVarRangeError(timestamp)
 
         try:
             chunk = self._chunk(timestamp)
@@ -1035,7 +1042,7 @@ class TSDBVar(TSDBBase):
         else:
             begin = int(begin)
             if begin < self.min_timestamp():
-                begin = mints
+                begin = self.min_timestamp()
 
         if end is None:
             end = self.max_timestamp()
@@ -1086,30 +1093,6 @@ class TSDBVar(TSDBBase):
         Data should be a subclass of TSDBRow."""
         chunk = self._chunk(data.timestamp, create=True)
         return chunk.write_row(data)
-
-    def increase_delta(self, timestamp, value):
-        if self.type != Aggregate:
-            raise TSDBVarIsNotAggregate("not an Aggregate")
-
-        try:
-            row = self.get(timestamp)
-        except (TSDBVarEmpty, TSDBVarRangeError):
-            aggs = {}
-            for a in self.metadata['AGGREGATES']:
-                aggs[a] = 0
-
-            row = self.type(timestamp, 0, **aggs)
-
-        row.delta += value
-        row.flags |= ROW_VALID
-        self.insert(row)
-
-    def invalidate(self, timestamp):
-        """Remove the ROW_VALID flag from a row."""
-        row = self.get(timestamp)
-        if row.flags & ROW_VALID:
-            row.flags ^= ROW_VALID
-            self.insert(row)
 
     def flush(self):
         """Flush all the chunks for this TSDBVar to disk."""
@@ -1163,6 +1146,7 @@ class TSDBVarChunk(object):
     @classmethod
     def create(klass, tsdb_var, name, use_mmap=False):
         """Create the named TSDBVarChunk."""
+        print "%s creating %s" % (tsdb_var.path, name)
         path = os.path.join(tsdb_var.path, name)
         f = open(path, "w")
         f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
@@ -1233,9 +1217,30 @@ class Aggregator(object):
     CounterAggregator.  It should be possible to generalize some of this
     functionality into a base Aggregator class though."""
 
-    def __init__(self, agg, ancestor):
+    def __init__(self, agg, ancestor, max_rate=10*1000*1000*1000):
         self.agg = agg
         self.ancestor = ancestor
+        self.max_rate = max_rate
+
+    def _empty_row(self, var, timestamp):
+        aggs = {}
+        for a in var.metadata['AGGREGATES']:
+            aggs[a] = 0
+
+        return var.type(timestamp, 0, **aggs)
+
+    def _increase_delta(self, var, timestamp, value):
+        if var.type != Aggregate:
+            raise TSDBVarIsNotAggregate("not an Aggregate")
+
+        try:
+            row = var.get(timestamp)
+        except (TSDBVarEmpty, TSDBVarRangeError):
+            row = self._empty_row(var, timestamp)
+
+        row.delta += value
+        row.flags |= ROW_VALID
+        var.insert(row)
 
     def update(self, uptime_var=None):
         if self.ancestor.type == Aggregate:
@@ -1285,6 +1290,9 @@ class Aggregator(object):
 
 
             assert delta_v >= 0
+            #
+            # tests for edge cases: rollover, invalid, large gaps in data
+            # not sure how to properly invalidate individual rows
 
             # allocate a portion of this data to a given bin
             prev_slot = (prev.timestamp / step) * step
@@ -1295,8 +1303,8 @@ class Aggregator(object):
             curr_frac = int(floor(delta_v * (curr.timestamp - curr_slot) /
                 float(delta_t)))
 
-            self.agg.increase_delta(curr_slot, curr_frac)
-            self.agg.increase_delta(curr_slot - step, prev_frac)
+            self._increase_delta(self.agg, curr_slot, curr_frac)
+            self._increase_delta(self.agg, curr_slot - step, prev_frac)
 
             # if we have some left, try to backfill
             if curr_frac + prev_frac != delta_v:
@@ -1307,13 +1315,18 @@ class Aggregator(object):
                     missed_frac = missed / len(missed_slots)
                     missed_rem = missed % (missed_frac * len(missed_slots))
                     for slot in missed_slots:
-                        self.agg.increase_delta(slot, missed_frac)
+                        self._increase_delta(self.agg, slot, missed_frac)
 
                     # distribute the remainder
                     for i in range(missed_rem):
-                        self.agg.increase_delta(missed_slots[i], 1)
+                        self._increase_delta(self.agg, missed_slots[i], 1)
                 else:
                     for slot in missed_slots:
+                        try:
+                            row = self.agg.get(slot)
+                        except TSDBVarRangeError:
+                            row = self._empty_row(slot)
+
                         self.agg.invalidate_row(slot)
 
             prev = curr
@@ -1332,7 +1345,8 @@ class Aggregator(object):
         # LAST_UPDATE points to the last step updated
 
         step = self.agg.metadata['STEP']
-        steps_needed = step / self.ancestor.metadata['STEP']
+        steps_needed = step // self.ancestor.metadata['STEP']
+        # XXX what to do if our step isn't divisible by ancestor steps?
 
         data = self.ancestor.select(
                 begin=self.agg.metadata['LAST_UPDATE']
@@ -1342,6 +1356,13 @@ class Aggregator(object):
         # get all timestamps since the last update
         # fill as many bins as possible
         work = list(itertools.islice(data, 0, steps_needed))
+
+        # if the  first datapoint is on a step boundary we discard it
+        # XXX do something more clever?
+        if work[0].timestamp % step == 0:
+            del work[0]
+            work.extend(itertools.islice(data, 0, 1))
+
         while len(work) == steps_needed:
             slot = ((work[0].timestamp / step) * step) + step
 
@@ -1356,16 +1377,16 @@ class Aggregator(object):
                     valid += 1
                     row.delta += datum.delta
     
-                    if not row.min or datum.delta < row.min:
+                    if isNaN(row.min) or datum.delta < row.min:
                         row.min = datum.delta
     
-                    if not row.max or datum.delta > row.max:
+                    if isNaN(row.max) or datum.delta > row.max:
                         row.max = datum.delta
             row.average = row.delta / float(step)
             valid_ratio = float(valid)/float(len(work))
 
             if valid_ratio < self.agg.metadata['VALID_RATIO']:
-                self.agg.invalidate(slot)
+                row.invalidate()
 
             self.agg.insert(row)
 
@@ -1403,7 +1424,7 @@ INTERVAL_SCALARS = {
     'w': 60*60*24*7
 }
 
-INTERVAL_RE = re.compile('^\+(\d+)(%s)?$' % ('|'.join(INTERVAL_SCALARS.keys())))
+INTERVAL_RE = re.compile('^(\d+)(%s)?$' % ('|'.join(INTERVAL_SCALARS.keys())))
 
 def calculate_interval(s):
     """
