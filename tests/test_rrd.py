@@ -5,8 +5,10 @@ import math
 from nose import with_setup
 
 from tsdb import *
+from tsdb.row import Counter32, Counter64
+from tsdb.chunk_mapper import YYYYMMDDChunkMapper
+
 import rrdtool
-import tsdb
 
 from fpconst import isNaN
 

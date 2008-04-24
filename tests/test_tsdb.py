@@ -10,6 +10,8 @@ import figleaf
 figleaf.start()
 
 from tsdb import *
+from tsdb.row import *
+from tsdb.chunk_mapper import YYYYMMDDChunkMapper, YYYYMMChunkMapper, CHUNK_MAPPER_MAP
 
 TESTDB = "tmp/testdb"
 
@@ -239,7 +241,7 @@ class TestData(TSDBTestCase):
 
     def testData(self):
         """Test moderate datasets with each TSDBRow subclass. (SLOW!)"""
-        for t in TYPE_MAP[1:]:
+        for t in ROW_TYPE_MAP[1:]:
             if t == Aggregate:
                 continue
             for m in CHUNK_MAPPER_MAP[1:]:
@@ -359,7 +361,8 @@ class AggregatorSmokeTest(TSDBTestCase):
             check_agg(var, "1h", ["average", "delta"], 8 + 2*8, "!LLdd")
             check_agg(var, "6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
 
-    def testAggregatorAverage(self): """Test the average aggregator.
+    def testAggregatorAverage(self):
+        """Test the average aggregator.
 
         The counter is incremented by 5*60*60 at each each step, so the
         average should be 5 at each step."""
@@ -505,21 +508,6 @@ class TestNonDecreasing(TSDBTestCase):
     def tearDown(self):
         os.system("rm -rf %s.nd" % (TESTDB))
         os.system("mv %s %s.nd" % (TESTDB, TESTDB))
-#
-# STATE: add tests for gaps
-# 
-def test_against_rrd():
-    """
-        rrdtool.create(rrd_file,
-           "--start", str(start_time),
-           "--step", "%d" % interval_time,
-           "DS:in:COUNTER:%d:0:U" % (interval_time * 2) ,
-           "DS:out:COUNTER:%d:0:U" % (interval_time * 2),
-           "RRA:AVERAGE:0.5:1:%d" % (num_data_points),
-           "RRA:MAX:0.5:1:%d" % (num_data_points),
-           "RRA:LAST:0.5:1:%d" % (num_data_points))
-    """
-    pass
 
 def test_calculate_interval():
     for (x,y) in (("1s", 1), ("37s", 37), ("1m", 60), ("37m", 37*60),
@@ -533,7 +521,7 @@ def test_calculate_interval():
         calculate_interval(arg)
 
     for arg in ("-99", "99p"):
-        print "IntervalError:", arg
+        print "IntervalError:", arg, InvalidInterval
         exception_test(arg)
 
 def teardown():

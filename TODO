@@ -1,14 +1,12 @@
 now:
   implement locking
-  normalize exceptions
   complete basic documentation
 
-  define aggregation functions
   make TSDBVar iterable -- started
 
 maybe:
 
-  convert metadata to JSON?
+  convert metadata to JSON? or YAML?
   rename current chunk management to FixedSizeChunkMapper?
   implement variable size ChunkManager
   allow chunks to be gzip'd?

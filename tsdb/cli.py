@@ -149,8 +149,7 @@ class TSDBCLI(Cmd):
             else:
                 pprint(attr)
 
-
-if __name__ == '__main__':
+def main():
     parser = OptionParser(usage="%prog [options] DATABASE", version="%prog "+VERSION)
 
     (options, args) = parser.parse_args()
@@ -161,3 +160,6 @@ if __name__ == '__main__':
 
     db_path = args[0]
     TSDBCLI(db_path).cmdloop()
+
+if __name__ == '__main__':
+    main()

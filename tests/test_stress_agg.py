@@ -5,6 +5,8 @@ import os
 from nose import with_setup
 
 from tsdb import *
+from tsdb.row import Counter64
+from tsdb.chunk_mapper import YYYYMMDDChunkMapper
 
 TEST_DB = "tmp/agg_stress_db"
 
