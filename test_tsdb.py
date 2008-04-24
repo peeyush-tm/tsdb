@@ -11,7 +11,7 @@ figleaf.start()
 
 from tsdb import *
 
-TESTDB = "testdb"
+TESTDB = "tmp/testdb"
 
 def setup():
     os.system("rm -rf %s" % TESTDB)
@@ -27,6 +27,9 @@ class TSDBTestCase(unittest.TestCase):
         os.system("rm -rf " + TESTDB)
 
 class CreateTSDB(unittest.TestCase):
+    def setUp(self):
+        setup()
+
     def testCreate(self):
         """can we create a db?"""
         try:
@@ -306,11 +309,23 @@ class AggregatorSmokeTest(TSDBTestCase):
         for i in range(24):
             self.var.insert(rtype(i * nstep, ROW_VALID, i * rate * nstep))
 
-        self.var.add_aggregate(step, nstep, mapper, ['average','delta'])
+        self.var.add_aggregate(step, nstep, mapper, ['average','delta'],
+                metadata=dict(HEARTBEAT=12*60*60))
         for agg in aggs:
-            self.var.add_aggregate(agg, calculate_interval(agg), mapper, calc_aggs) 
+            self.var.add_aggregate(agg, calculate_interval(agg), mapper,
+                    calc_aggs)
+            assert self.var.get_aggregate(agg).metadata['LAST_UPDATE'] == 0
 
         self.var.update_all_aggregates()
+
+        for agg in map(lambda x: self.var.get_aggregate(x), self.var.list_aggregates()):
+            if agg.metadata['STEP'] == nstep:
+                n = 1
+            else:
+                n = 2
+
+            assert agg.metadata['LAST_UPDATE'] == 24*3600 - n * agg.metadata['STEP']
+
 
     def testFileStructure(self):
         """Do the aggregates get put in the right place?"""
@@ -344,8 +359,7 @@ class AggregatorSmokeTest(TSDBTestCase):
             check_agg(var, "1h", ["average", "delta"], 8 + 2*8, "!LLdd")
             check_agg(var, "6h", ["average", "delta", "min", "max"], 8 + 4*8, "!LLdddd")
 
-    def testAggregatorAverage(self):
-        """Test the average aggregator.
+    def testAggregatorAverage(self): """Test the average aggregator.
 
         The counter is incremented by 5*60*60 at each each step, so the
         average should be 5 at each step."""
@@ -381,9 +395,22 @@ class AggregatorSmokeTest(TSDBTestCase):
         see what happens if the first datapoint in A is at 30."""
         pass
 
+    def testIncompleteData(self):
+        """Test to see what happens if we don't have enough data to create the
+        next row of an Aggregate."""
+
+        var = self.db.get_var("foo")
+        var.add_aggregate("24h", calculate_interval("24h"), YYYYMMChunkMapper,
+                ["average", "delta"])
+        var.update_all_aggregates()
+        var.insert(Counter32(25*3600, ROW_VALID, 1))
+        var.update_all_aggregates()
+
     def tearDown(self):
         os.system("rm -rf %s.agg" % (TESTDB))
         os.system("mv %s %s.agg" % (TESTDB, TESTDB))
+
+
 
 class TestTSDBRows(unittest.TestCase):
     def testSizes(self):
@@ -441,7 +468,8 @@ class TestNonDecreasing(TSDBTestCase):
             u.insert(TimeTicks(1, ROW_VALID, 100))
             u.insert(TimeTicks(60, ROW_VALID, 1))
 
-            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
+            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper,
+                    ['average','delta'], metadata=dict(HEARTBEAT=120))
             t.update_all_aggregates(uptime_var=u)
             a = t.get_aggregate('60s')
             print a.get(1).delta
@@ -465,7 +493,9 @@ class TestNonDecreasing(TSDBTestCase):
             u.insert(TimeTicks(60, ROW_VALID, 6100))
             print u
 
-            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper, ['average','delta'])
+            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper,
+                    ['average','delta'],
+                    metadata=dict(HEARTBEAT=120))
             t.update_all_aggregates(uptime_var=u)
             a = t.get_aggregate('60s')
             print a.get(1).delta

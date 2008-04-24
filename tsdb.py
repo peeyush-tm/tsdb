@@ -164,6 +164,10 @@ class TSDBRow(object):
     def invalidate(self):
         self.flags &= ~ROW_VALID
 
+    @classmethod
+    def get_invalid_row(klass):
+        return klass(0,0,0)
+
 class Counter32(TSDBRow):
     """Represent a SNMP Counter32 variable.
 
@@ -286,6 +290,9 @@ class Aggregate(TSDBRow):
                     val = float(kwargs[agg])
 
                 setattr(self, agg, val)
+            else:
+                # XXX not i sure like this
+                setattr(self, agg, float('NaN'))
 
     def pack(self, metadata):
         l = []
@@ -345,6 +352,16 @@ class Aggregate(TSDBRow):
                 return False
         else:
             return NotImplemented
+
+    @classmethod
+    def get_invalid_row(self):
+        return klass(0,0)
+
+    def invalidate(self):
+        TSDBRow.invalidate(self)
+        for agg in self.aggregate_order:
+            setattr(self, agg, float('NaN'))
+
 
 """
 TSDB reserves bits 0-7 (the low 8 bits) of the flag field for globally defined flags. 
@@ -696,7 +713,9 @@ class TSDBBase(object):
             metadata = {}
 
         metadata['AGGREGATES'] = aggregates
-        metadata['LAST_UPDATE'] = 0
+
+        if not metadata.has_key('LAST_UPDATE'):
+            metadata['LAST_UPDATE'] = 0
 
         if not metadata.has_key('VALID_RATIO'):
             metadata['VALID_RATIO'] = 0.5
@@ -820,7 +839,8 @@ class TSDBVar(TSDBBase):
     tag = "TSDBVar"
     metadata_map = {'STEP': int, 'TYPE_ID': int, 'MIN_TIMESTAMP': int,
             'MAX_TIMESTAMP': int, 'VERSION': int, 'CHUNK_MAPPER_ID': int,
-            'AGGREGATES': list, 'LAST_UPDATE': int, 'VALID_RATIO': float}
+            'AGGREGATES': list, 'LAST_UPDATE': int, 'VALID_RATIO': float,
+            'HEARTBEAT': int}
 
     def __init__(self, parent, path, use_mmap=False, cache_chunks=False,
             metadata=None):
@@ -1005,12 +1025,12 @@ class TSDBVar(TSDBBase):
 
         try:
             chunk = self._chunk(timestamp)
+            val = chunk.read_row(timestamp)
         except TSDBVarChunkDoesNotExistError:
-            raise TSDBVarRangeError(timestamp)
-
-        val = chunk.read_row(timestamp)
+            val = self.type.get_invalid_row()
 
         if not val.flags & ROW_VALID:
+            # if row isn't valid the timestamp is 0, so we fix that
             val.timestamp = timestamp
 
         return val
@@ -1259,7 +1279,23 @@ class Aggregator(object):
         Scan all of the new data and bin it in the appropriate place.  At
         either end a bin may have only partial data.  Detect and handle
         rollovers.  We process all data with a timestamp >= begin and
-        with ROW_VALID set."""
+        with ROW_VALID set.
+
+        Diagram of the relationship between the prev and curr elements in the
+        main loop:
+
+        prev_slot          curr_slot
+        |                  |
+        v                  v
+        +----------+       +----------+
+        |   prev   | . . . |   curr   |
+        +----------+       +----------+
+             ^                   ^
+             |                   |
+             prev.timestamp      curr.timestamp
+             |                   |
+             |<---- delta_t ---->|
+        """
 
         step = self.agg.metadata['STEP']
         assert self.ancestor.metadata['STEP'] == step
@@ -1274,8 +1310,11 @@ class Aggregator(object):
 
         # XXX this only works for Counter types right now
         for curr in self.ancestor.select(begin=last_update+step, flags=ROW_VALID):
+            print prev
             delta_t = curr.timestamp - prev.timestamp
             delta_v = curr.value - prev.value
+            prev_slot = (prev.timestamp / step) * step
+            curr_slot = (curr.timestamp / step) * step
 
             if self.ancestor.type.can_rollover and delta_v < 0:
                 assert uptime_var is not None 
@@ -1288,6 +1327,12 @@ class Aggregator(object):
                 else:
                     delta_v = self.ancestor.type.rollover(delta_v)
 
+            # XXX: this is a kludge:
+            rate = float(delta_v) / float(delta_t)
+            if rate > 12000000000 / 8:
+                print "WARNING: bad data: ", rate, prev, curr
+                prev = curr
+                continue
 
             assert delta_v >= 0
             #
@@ -1295,43 +1340,49 @@ class Aggregator(object):
             # not sure how to properly invalidate individual rows
 
             # allocate a portion of this data to a given bin
-            prev_slot = (prev.timestamp / step) * step
-            prev_frac = int(ceil(delta_v * (step - (prev.timestamp - prev_slot)) /
-                float(delta_t)))
+            prev_frac = int( floor(
+                        delta_v * (prev_slot+step - prev.timestamp)
+                        / float(delta_t)
+                    ))
 
-            curr_slot = (curr.timestamp / step) * step
-            curr_frac = int(floor(delta_v * (curr.timestamp - curr_slot) /
-                float(delta_t)))
+            curr_frac = int( ceil(
+                        delta_v * (curr.timestamp - curr_slot)
+                        / float(delta_t)
+                    ))
+
+            if delta_t > self.agg.metadata['HEARTBEAT']:
+                for slot in range(prev_slot, curr_slot, step):
+                    try:
+                        row = self.agg.get(slot)
+                    except TSDBVarRangeError:
+                        row = self._empty_row(self.agg, slot)
+
+                    row.invalidate()
+                    self.agg.insert(row)
+
+                self._increase_delta(self.agg, curr_slot, curr_frac)
+                prev = curr
+                continue
 
             self._increase_delta(self.agg, curr_slot, curr_frac)
-            self._increase_delta(self.agg, curr_slot - step, prev_frac)
+            self._increase_delta(self.agg, prev_slot, prev_frac)
 
             # if we have some left, try to backfill
             if curr_frac + prev_frac != delta_v:
                 missed_slots = range(prev_slot+step, curr_slot, step)
-                if delta_t < self.agg.metadata['HEARTBEAT']:
-                    missed = delta_v - (curr_frac + prev_frac)
-                    assert missed > 0
-                    missed_frac = missed / len(missed_slots)
-                    missed_rem = missed % (missed_frac * len(missed_slots))
-                    for slot in missed_slots:
-                        self._increase_delta(self.agg, slot, missed_frac)
+                missed = delta_v - (curr_frac + prev_frac)
+                assert missed > 0
+                missed_frac = missed / len(missed_slots)
+                missed_rem = missed % (missed_frac * len(missed_slots))
+                for slot in missed_slots:
+                    self._increase_delta(self.agg, slot, missed_frac)
 
-                    # distribute the remainder
-                    for i in range(missed_rem):
-                        self._increase_delta(self.agg, missed_slots[i], 1)
-                else:
-                    for slot in missed_slots:
-                        try:
-                            row = self.agg.get(slot)
-                        except TSDBVarRangeError:
-                            row = self._empty_row(slot)
-
-                        self.agg.invalidate_row(slot)
+                # distribute the remainder
+                for i in range(missed_rem):
+                    self._increase_delta(self.agg, missed_slots[i], 1)
 
             prev = curr
 
-        self.agg.metadata['LAST_UPDATE'] = prev.timestamp
 
         for row in self.agg.select(begin=last_update, flags=ROW_VALID):
             if row.delta != 0:
@@ -1340,9 +1391,14 @@ class Aggregator(object):
                 row.average = 0.0
             self.agg.insert(row)
 
+        self.agg.metadata['LAST_UPDATE'] = prev.timestamp
+        self.agg.save_metadata()
+        self.agg.flush()
+
     def update_from_aggregate(self):
         """Update this aggregate from another aggregate."""
         # LAST_UPDATE points to the last step updated
+        print "From agg:", self.agg
 
         step = self.agg.metadata['STEP']
         steps_needed = step // self.ancestor.metadata['STEP']
@@ -1357,16 +1413,11 @@ class Aggregator(object):
         # fill as many bins as possible
         work = list(itertools.islice(data, 0, steps_needed))
 
-        # if the  first datapoint is on a step boundary we discard it
-        # XXX do something more clever?
-        if work[0].timestamp % step == 0:
-            del work[0]
-            work.extend(itertools.islice(data, 0, 1))
-
+        slot = None
         while len(work) == steps_needed:
-            slot = ((work[0].timestamp / step) * step) + step
+            slot = ((work[0].timestamp / step) * step) #+ step
 
-            assert work[-1].timestamp == slot
+#            assert work[-1].timestamp == slot
 
             valid = 0
             row = Aggregate(slot, ROW_VALID, delta=0, average=None,
@@ -1391,8 +1442,11 @@ class Aggregator(object):
             self.agg.insert(row)
 
             work = list(itertools.islice(data, 0, steps_needed))
-
-        self.agg.metadata['LAST_UPDATE'] = slot
+       
+        if slot is not None:
+            self.agg.metadata['LAST_UPDATE'] = slot
+            self.agg.save_metadata()
+            self.agg.flush()
 
 
 # FIXME These should be refactored into TSDBVarChunk
