@@ -2,8 +2,10 @@
 
 import os
 import sys
+import time
 from cmd import Cmd
 from optparse import OptionParser
+from pprint import pprint
 
 from tsdb import *
 
@@ -27,7 +29,6 @@ class TSDBCLI(Cmd):
         self._locals = {}
         self._globals = {}
 
-
     def do_quit(self, args):
         return 1
         self.do_quit(args)
@@ -39,13 +40,18 @@ class TSDBCLI(Cmd):
         # XXX need to handle paths
         for set in self.pwl.list_sets():
             print set
-    do_ls = do_list_sets
 
     def do_list_vars(self, args):
         # XXX need to handle paths
         for set in self.pwl.list_vars():
             print set
     do_lv = do_list_vars
+
+    def do_list_all(self, arg):
+        self.do_list_sets(arg)
+        self.do_list_vars(arg)
+
+    do_ls = do_list_all
 
     def do_cl(self, arg):
         # XXX need to handle paths
@@ -91,6 +97,57 @@ class TSDBCLI(Cmd):
         print self.pwl
 
     do_pwd = do_pwl
+
+    #def do_metadata(self, arg):
+    #    print self.pwl.metadata
+
+    def do_get(self, arg):
+        print self.pwl.get(int(arg))
+
+    def do_dir(self, arg):
+        print dir(self.pwl)
+
+    def do_type(self, arg):
+        if isinstance(self.pwl, TSDBVar):
+            print self.pwl.tag, self.pwl.type.__name__
+        else:
+            print self.pwl.tag
+
+    def do_select(self, arg):
+        if not isinstance(self.pwl, TSDBVar):
+            print "Not a var:", self.pwl
+            return
+
+        args = arg.split()
+        d = {}
+
+        if len(args) > 0:
+            for a in args:
+                (k,v) = a.split('=')
+                d[k] = int(v)
+        else:
+            d['end'] = time.time()
+            d['begin'] = d['end'] - self.pwl.metadata['STEP'] * 25
+
+        for row in self.pwl.select(**d):
+            print time.ctime(row.timestamp), row
+
+    def default(self, arg):
+        args = arg.split()
+        if hasattr(self.pwl, args[0]):
+            attr = getattr(self.pwl, args[0])
+            if callable(attr):
+                if isinstance(self.pwl, TSDBVar):
+                    if args[0] == 'get':
+                        print attr(int(args[1]))
+                    elif args[0] == 'update_aggregate':
+                        print attr(args[1])
+                    elif args[0] == 'update_all_aggregates':
+                        print attr()
+                else:
+                    print "add feature to call method", args[0]
+            else:
+                pprint(attr)
 
 
 if __name__ == '__main__':
