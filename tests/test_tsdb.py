@@ -307,7 +307,7 @@ class AggregatorSmokeTest(TSDBTestCase):
         Step can be expressed as a string"""
 
         nstep = calculate_interval(step)
-        self.var = self.db.add_var(name, rtype, 60*60, mapper)
+        self.var = self.db.add_var(name, rtype, nstep, mapper)
         for i in range(24):
             self.var.insert(rtype(i * nstep, ROW_VALID, i * rate * nstep))
 
@@ -407,6 +407,13 @@ class AggregatorSmokeTest(TSDBTestCase):
                 ["average", "delta"])
         var.update_all_aggregates()
         var.insert(Counter32(25*3600, ROW_VALID, 1))
+        var.update_all_aggregates()
+
+    def testUpdate(self):
+        """Test that updating the aggregate behaves as expected."""
+
+        var = self.db.get_var("foo")
+        var.insert(Counter32(25*3600, ROW_VALID, 3600*5*25))
         var.update_all_aggregates()
 
     def tearDown(self):
@@ -523,6 +530,7 @@ def test_calculate_interval():
     for arg in ("-99", "99p"):
         print "IntervalError:", arg, InvalidInterval
         exception_test(arg)
+
 
 def teardown():
     figleaf.stop()

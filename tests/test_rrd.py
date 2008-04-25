@@ -97,9 +97,11 @@ def test_simple_rrd():
 @with_setup(setup_run, None)
 def test_rrd_gap1():
     """Test that we handle gaps in a similar fashion to RRDTool.
+
     We aren't identical though because we will optimistically report partial
     results for the last timestep.  RRDTool keeps some state to make sure
-    it's got full data for a timestep before reporting anything."""
+    it's got full data for a timestep before reporting anything.
+    """
     db = TSDB(TEST_DB)
     var = db.add_var("foo", Counter32, 30, YYYYMMDDChunkMapper)
     var.add_aggregate("30s", 30, YYYYMMDDChunkMapper, ["average", "delta"],
@@ -132,7 +134,7 @@ def test_rrd_gap1():
         if r is None and isNaN(a.average):
             assert True
         else:
-            pass #assert a.average == r
+            assert a.average == r
 
 def teardown():
     pass
