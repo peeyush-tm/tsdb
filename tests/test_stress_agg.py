@@ -19,7 +19,7 @@ def test_gap1():
 
     db = TSDB.create(TEST_DB)
     var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
-    agg = var.add_aggregate("30s", 30, YYYYMMDDChunkMapper, ['average', 'delta'],
+    agg = var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'],
             {'HEARTBEAT': 90})
     var.insert(Counter64(0, ROW_VALID, 30000))
     # miss a poll at 30s

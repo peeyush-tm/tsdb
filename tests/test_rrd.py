@@ -48,10 +48,10 @@ def test_simple_rrd():
     """Compare random data with RRDTool for several aggregates."""
     db = TSDB(TEST_DB)
     var = db.add_var("foo", Counter32, 60, YYYYMMDDChunkMapper)
-    var.add_aggregate("60s", 60, YYYYMMDDChunkMapper, ["average", "delta"],
+    var.add_aggregate("60s", YYYYMMDDChunkMapper, ["average", "delta"],
             metadata=dict(HEARTBEAT=120) )
-    var.add_aggregate("120s", 120, YYYYMMDDChunkMapper, ["average", "delta"])
-    var.add_aggregate("10m", 10*60, YYYYMMDDChunkMapper, ["average", "delta"])
+    var.add_aggregate("120s", YYYYMMDDChunkMapper, ["average", "delta"])
+    var.add_aggregate("10m", YYYYMMDDChunkMapper, ["average", "delta"])
 
     begin = 3600*24*365*20
     rrd_file = rrd_from_tsdb_var(var, begin-60)
@@ -104,7 +104,7 @@ def test_rrd_gap1():
     """
     db = TSDB(TEST_DB)
     var = db.add_var("foo", Counter32, 30, YYYYMMDDChunkMapper)
-    var.add_aggregate("30s", 30, YYYYMMDDChunkMapper, ["average", "delta"],
+    var.add_aggregate("30s", YYYYMMDDChunkMapper, ["average", "delta"],
             metadata=dict(HEARTBEAT=90) )
     begin = 3600*24*365*20
     rrd_file = rrd_from_tsdb_var(var, begin-60, heartbeat=90)

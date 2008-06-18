@@ -12,6 +12,7 @@ figleaf.start()
 from tsdb import *
 from tsdb.row import *
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper, YYYYMMChunkMapper, CHUNK_MAPPER_MAP
+from tsdb.util import calculate_interval
 
 TESTDB = "tmp/testdb"
 
@@ -311,11 +312,10 @@ class AggregatorSmokeTest(TSDBTestCase):
         for i in range(24):
             self.var.insert(rtype(i * nstep, ROW_VALID, i * rate * nstep))
 
-        self.var.add_aggregate(step, nstep, mapper, ['average','delta'],
+        self.var.add_aggregate(step, mapper, ['average','delta'],
                 metadata=dict(HEARTBEAT=12*60*60))
         for agg in aggs:
-            self.var.add_aggregate(agg, calculate_interval(agg), mapper,
-                    calc_aggs)
+            self.var.add_aggregate(agg, mapper, calc_aggs)
             assert self.var.get_aggregate(agg).metadata['LAST_UPDATE'] == 0
 
         self.var.update_all_aggregates()
@@ -403,8 +403,7 @@ class AggregatorSmokeTest(TSDBTestCase):
         next row of an Aggregate."""
 
         var = self.db.get_var("foo")
-        var.add_aggregate("24h", calculate_interval("24h"), YYYYMMChunkMapper,
-                ["average", "delta"])
+        var.add_aggregate("24h", YYYYMMChunkMapper, ["average", "delta"])
         var.update_all_aggregates()
         var.insert(Counter32(25*3600, ROW_VALID, 1))
         var.update_all_aggregates()
@@ -478,8 +477,7 @@ class TestNonDecreasing(TSDBTestCase):
             u.insert(TimeTicks(1, ROW_VALID, 100))
             u.insert(TimeTicks(60, ROW_VALID, 1))
 
-            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper,
-                    ['average','delta'], metadata=dict(HEARTBEAT=120))
+            t.add_aggregate("60s", YYYYMMDDChunkMapper, ['average','delta'], metadata=dict(HEARTBEAT=120))
             t.update_all_aggregates(uptime_var=u)
             a = t.get_aggregate('60s')
             print a.get(1).delta
@@ -503,8 +501,7 @@ class TestNonDecreasing(TSDBTestCase):
             u.insert(TimeTicks(60, ROW_VALID, 6100))
             print u
 
-            t.add_aggregate("60s", 60, YYYYMMDDChunkMapper,
-                    ['average','delta'],
+            t.add_aggregate("60s", YYYYMMDDChunkMapper, ['average','delta'],
                     metadata=dict(HEARTBEAT=120))
             t.update_all_aggregates(uptime_var=u)
             a = t.get_aggregate('60s')

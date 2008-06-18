@@ -3,6 +3,7 @@ now:
   complete basic documentation
 
   make TSDBVar iterable -- started
+  make sure doc tests work
 
 maybe:
 

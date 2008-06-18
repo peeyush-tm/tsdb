@@ -20,7 +20,7 @@ def test_rounding1():
 
     db = TSDB.create(TEST_DB)
     var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
-    agg = var.add_aggregate("30s", 30, YYYYMMDDChunkMapper, ['average', 'delta'],
+    agg = var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'],
             {'HEARTBEAT': 90})
     var.insert(Counter64(1204329701, ROW_VALID, 54652476))
     var.insert(Counter64(1204329731, ROW_VALID, 54652612))
@@ -34,7 +34,7 @@ def test_erroneous_data1():
     db = TSDB.create(TEST_DB)
     var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
     up = db.add_var("uptime", TimeTicks, 30, YYYYMMDDChunkMapper)
-    agg = var.add_aggregate("30s", 30, YYYYMMDDChunkMapper, ['average', 'delta'],
+    agg = var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'],
             {'HEARTBEAT': 90})
 
     var.insert(Counter64(1204345906, ROW_VALID, 54697031))
