@@ -449,7 +449,11 @@ class TSDBVar(TSDBBase):
         # XXX fails if the oldest chunk is all invalid
         ts = self.min_timestamp()
         while True:
-            chunk = self._chunk(ts)
+            try:
+                chunk = self._chunk(ts)
+            except TSDBVarChunkDoesNotExistError:
+                raise TSDBVarNoValidData("no valid data found in %s" % (self.path,))
+
             row = chunk.read_row(ts)
             if row.flags & ROW_VALID:
                 return row.timestamp
@@ -460,7 +464,10 @@ class TSDBVar(TSDBBase):
         """Finds the timestamp of the maximum valid row."""
         ts = self.max_timestamp()
         while True:
-            chunk = self._chunk(ts)
+            try:
+                chunk = self._chunk(ts)
+            except TSDBVarChunkDoesNotExistError:
+                raise TSDBVarNoValidData("no valid data found in %s" % (self.path,))
             row = chunk.read_row(ts)
             if row.flags & ROW_VALID:
                 return row.timestamp
@@ -603,12 +610,11 @@ class TSDBVarChunk(object):
 
     def __init__(self, tsdb_var, name, use_mmap=False):
         """Load the specified TSDBVarChunk."""
-        path = os.path.join(tsdb_var.path, name)
-        if not os.path.exists(path):
-            raise TSDBVarChunkDoesNotExistError(path)
+        self.path = os.path.join(tsdb_var.path, name)
+        if not os.path.exists(self.path):
+            raise TSDBVarChunkDoesNotExistError(self.path)
 
         self.tsdb_var = tsdb_var
-        self.path = path
         self.name = name
         self.use_mmap = use_mmap
 

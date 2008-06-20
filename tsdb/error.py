@@ -49,3 +49,7 @@ class TSDBNameInUseError(TSDBError):
 class InvalidInterval(TSDBError):
     """The interval specification did not parse."""
     pass
+
+class TSDBVarNoValidData(TSDBError):
+    """The TSDBVar has no valid data"""
+    pass

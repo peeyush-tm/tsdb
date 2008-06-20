@@ -11,6 +11,7 @@ figleaf.start()
 
 from tsdb import *
 from tsdb.row import *
+from tsdb.error import *
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper, YYYYMMChunkMapper, CHUNK_MAPPER_MAP
 from tsdb.util import calculate_interval
 
@@ -161,6 +162,7 @@ class TestBounds(TSDBVarTestCase):
         TSDBVarTestCase.setUp(self)
         self.ts = 36*3600
         self.v.insert(Counter32(self.ts, ROW_VALID, 37))
+        self.nodata = self.db.add_var("quux", Counter32, 60, YYYYMMDDChunkMapper)
 
     def testBounds(self):
         """Test that min and max timestamp functions."""
@@ -193,6 +195,20 @@ class TestBounds(TSDBVarTestCase):
         self.v.insert(Counter32(self.ts - 24*3600, 0, 0))
         self.v.flush()
         self.assertEqual(self.ts, self.v.min_valid_timestamp())
+
+    def testMaxValidTimeStampNoData(self):
+        self.assertRaises(TSDBVarEmpty, self.nodata.max_valid_timestamp)
+
+    def testMinValidTimeStampNoData(self):
+        self.assertRaises(TSDBVarEmpty, self.nodata.min_valid_timestamp)
+
+    def testMaxValidTimeStampNoValidData(self):
+        self.nodata.insert(Counter32(0,0,0))
+        self.assertRaises(TSDBVarNoValidData, self.nodata.max_valid_timestamp)
+
+    def testMinValidTimeStampNoValidData(self):
+        self.nodata.insert(Counter32(0,0,0))
+        self.assertRaises(TSDBVarNoValidData, self.nodata.min_valid_timestamp)
 
 
 class TestChunkList(TSDBVarTestCase):
