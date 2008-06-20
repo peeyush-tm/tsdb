@@ -31,6 +31,9 @@ class TSDBBase(object):
     def __str__(self):
         return "%s [%s]" % (self.tag, self.path)
 
+    def __repr__(self):
+        return '<%s %s>' % (self.tag, self.path)
+
     def load_metadata(self):
         """Load metadata for this container.
 
@@ -164,6 +167,8 @@ class TSDBBase(object):
         if metadata is None:
             metadata = {}
 
+        secs = calculate_interval(step)
+
         metadata['AGGREGATES'] = aggregates
 
         if not metadata.has_key('LAST_UPDATE'):
@@ -172,13 +177,15 @@ class TSDBBase(object):
         if not metadata.has_key('VALID_RATIO'):
             metadata['VALID_RATIO'] = 0.5
 
+        if not metadata.has_key('HEARTBEAT'):
+            metadata['HEARTBEAT'] = 3 * secs
+
         try:
             aggset = self.get_set("TSDBAggregates")
         except:
             aggset = self.add_set("TSDBAggregates")
 
-        secs = str(calculate_interval(step))
-        return aggset.add_var(secs, Aggregate, secs, chunk_mapper, metadata)
+        return aggset.add_var(str(secs), Aggregate, secs, chunk_mapper, metadata)
 
     @classmethod
     def is_tag(klass, path):
@@ -281,12 +288,13 @@ class TSDBSet(TSDBBase):
 class TSDBVar(TSDBBase):
     """A TSDBVar represent a timeseries.
 
-    A TSDBVar is broken into TSDBVarChunks.
+    A TSDBVar is broken into TSDBVarChunks of a size dictated by the
+    ChunkMapper in use for a given TSDBVar.
 
     TSDBVars can be nested arbitrarily, but by convention the only TSDBVars
     inside a TSDBVar are aggregates.  By convetion aggregate sub variables
-    will be named +nI, for example 20 minute aggregates would be +20m.  See
-    the doc string for expand_interval for acceptable values of I."""
+    will be named n representing the number of seconds in the aggregate.
+    For example 20 minute aggregates would be 120."""
 
     tag = "TSDBVar"
     metadata_map = {'STEP': int, 'TYPE_ID': int, 'MIN_TIMESTAMP': int,
@@ -439,9 +447,9 @@ class TSDBVar(TSDBBase):
     def min_valid_timestamp(self):
         """Finds the timestamp of the minimum valid row."""
         # XXX fails if the oldest chunk is all invalid
-        chunk = self._chunk(self.min_timestamp())
-        ts = self.metadata['MIN_TIMESTAMP']
+        ts = self.min_timestamp()
         while True:
+            chunk = self._chunk(ts)
             row = chunk.read_row(ts)
             if row.flags & ROW_VALID:
                 return row.timestamp
@@ -450,9 +458,9 @@ class TSDBVar(TSDBBase):
 
     def max_valid_timestamp(self):
         """Finds the timestamp of the maximum valid row."""
-        chunk = self._chunk(self.max_timestamp())
-        ts = self.metadata['MAX_TIMESTAMP']
+        ts = self.max_timestamp()
         while True:
+            chunk = self._chunk(ts)
             row = chunk.read_row(ts)
             if row.flags & ROW_VALID:
                 return row.timestamp
@@ -615,6 +623,12 @@ class TSDBVarChunk(object):
 
         self.begin = tsdb_var.chunk_mapper.begin(os.path.basename(self.path))
 
+    def __str__(self):
+        return 'TSDBVarChunk [%s]' % (self.path, )
+
+    def __repr__(self):
+        return '<TSDBVarChunk %s>' % (self.path, )
+
     @classmethod
     def create(klass, tsdb_var, name, use_mmap=False):
         """Create the named TSDBVarChunk."""
@@ -656,6 +670,7 @@ class TSDBVarChunk(object):
         This offset is relative to the beginning of this TSDBVarChunk."""
         o = ((timestamp - self.begin) / self.tsdb_var.metadata['STEP']) \
                 * self.tsdb_var.rowsize()
+        assert o >= 0
         return o
 
     def write_row(self, data):

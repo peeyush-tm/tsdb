@@ -176,6 +176,24 @@ class TestBounds(TSDBVarTestCase):
         self.v.insert(Counter32(self.ts - 24*3600, ROW_VALID, 37))
         self.assertEqual(self.ts - 24*3600, self.v.min_valid_timestamp())
 
+    def testMaxValidTimeStamp(self):
+        self.assertEqual(self.ts, self.v.max_valid_timestamp())
+
+    def testMinValidTimeStamp(self):
+        self.assertEqual(self.ts, self.v.min_valid_timestamp())
+
+    def testMaxValidTimeStampBetweenChunks(self):
+        """Test that the max_valid_timestamp method can traverse chunks"""
+        self.v.insert(Counter32(self.ts + 24*3600, 0, 0))
+        self.v.flush()
+        self.assertEqual(self.ts, self.v.max_valid_timestamp())
+
+    def testMinValidTimeStampBetweenChunks(self):
+        """Test that the min_valid_timestamp method can traverse chunks"""
+        self.v.insert(Counter32(self.ts - 24*3600, 0, 0))
+        self.v.flush()
+        self.assertEqual(self.ts, self.v.min_valid_timestamp())
+
 
 class TestChunkList(TSDBVarTestCase):
     def setUp(self):
@@ -397,6 +415,25 @@ class AggregatorSmokeTest(TSDBTestCase):
         For example if Agg A is 10 seconds wide and Agg B is 30 seconds wide
         see what happens if the first datapoint in A is at 30."""
         pass
+
+    def testNoData(self):
+        """Test to see what happens if the TSDBVar we are trying to aggregate
+        is empty."""
+
+        var = self.db.add_var("empty", Counter32, 30, YYYYMMDDChunkMapper)
+        var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'])
+        var.update_all_aggregates()
+
+    def testOneRow(self):
+        """Test to see what happens if the TSDBVar we are trying to aggregate
+        has only one row."""
+
+        var = self.db.add_var("empty", Counter32, 30, YYYYMMDDChunkMapper)
+        var.insert(Counter32(int(time.time()), ROW_VALID, 37))
+        var.flush()
+        print var
+        var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'])
+        var.update_all_aggregates()
 
     def testIncompleteData(self):
         """Test to see what happens if we don't have enough data to create the

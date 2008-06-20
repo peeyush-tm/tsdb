@@ -38,6 +38,7 @@ import time
 from tsdb.base import TSDB, TSDBVar, TSDBSet
 from tsdb.row import ROW_VALID
 from tsdb.error import *
+from tsdb.chunk_mapper import YYYYMMChunkMapper, YYYYMMDDChunkMapper
 
 __version__ = ""
 
