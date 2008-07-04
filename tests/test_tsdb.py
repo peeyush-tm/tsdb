@@ -13,7 +13,7 @@ from tsdb import *
 from tsdb.row import *
 from tsdb.error import *
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper, YYYYMMChunkMapper, CHUNK_MAPPER_MAP
-from tsdb.util import calculate_interval
+from tsdb.util import calculate_interval, calculate_slot
 
 TESTDB = "tmp/testdb"
 
@@ -166,8 +166,8 @@ class TestBounds(TSDBVarTestCase):
 
     def testBounds(self):
         """Test that min and max timestamp functions."""
-        self.assertEqual(24*3600, self.v.min_timestamp())
-        self.assertEqual(48*3600-1, self.v.max_timestamp())
+        self.assertEqual(36*3600, self.v.min_timestamp())
+        self.assertEqual(36*3600, self.v.max_timestamp())
         
         self.assertEqual(self.ts, self.v.min_valid_timestamp())
         self.assertEqual(self.ts, self.v.max_valid_timestamp())
@@ -288,6 +288,8 @@ class TestData(TSDBTestCase):
                 size = m.size(name, t.size({}), self.step)
                 
                 r = range(0, (size/t.size({})) * self.step, self.step)
+
+                print begin, end, t, m, len(r)
 
                 # write a full chunk of data
                 for i in r:
@@ -522,17 +524,18 @@ class TestNonDecreasing(TSDBTestCase):
             varname = "test_%s" % (rtype.__name__)
             t = self.db.add_var(varname, rtype, 60, YYYYMMDDChunkMapper)
             t.insert(rtype(1, ROW_VALID, 100))
-            t.insert(rtype(60, ROW_VALID, 60))
+            t.insert(rtype(61, ROW_VALID, 62))
             t.flush()
 
             u = self.db.add_var(varname + "_uptime", TimeTicks, 60,
                     YYYYMMDDChunkMapper)
             u.insert(TimeTicks(1, ROW_VALID, 100))
-            u.insert(TimeTicks(60, ROW_VALID, 1))
+            u.insert(TimeTicks(61, ROW_VALID, 1))
 
             t.add_aggregate("60s", YYYYMMDDChunkMapper, ['average','delta'], metadata=dict(HEARTBEAT=120))
             t.update_all_aggregates(uptime_var=u)
             a = t.get_aggregate('60s')
+            print a.metadata
             print a.get(1).delta
 
             assert a.get(1).delta == 60
@@ -581,6 +584,12 @@ def test_calculate_interval():
         print "IntervalError:", arg, InvalidInterval
         exception_test(arg)
 
+def test_calculate_slot():
+    for (raw, expected, step) in (
+        (0, 0, 30), (1, 0, 30),
+        (29, 0, 30), (30, 30, 30),):
+
+        assert calculate_slot(raw, step) == expected
 
 def teardown():
     figleaf.stop()

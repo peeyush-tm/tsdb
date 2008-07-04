@@ -7,6 +7,7 @@ from nose import with_setup
 from tsdb import *
 from tsdb.row import Counter32, Counter64
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper
+from tsdb.util import rrd_from_tsdb_var
 
 import rrdtool
 
@@ -19,29 +20,13 @@ def setup_run():
     os.system("rm -rf %s %s" % (TEST_DB, TEST_RRD_DB_DIR))
     db = TSDB.create(TEST_DB)
     os.mkdir(TEST_RRD_DB_DIR)
-   
-def rrd_from_tsdb_var(var, begin, heartbeat=None):
-    name = os.path.basename(var.path)
-    step = var.metadata['STEP']
-    rrd_file = os.path.join(TEST_RRD_DB_DIR, "%s.rrd" % name)
-    rrd_args = [rrd_file, "--start", str(begin), "--step", str(step)]
-
-    if var.type in (Counter32, Counter64):
-        if heartbeat is None:
-            heartbeat = step*2
-        rrd_args.append("DS:%s:COUNTER:%d:0:U" % (name, heartbeat))
-
-    for aggname in var.list_aggregates():
-        agg = var.get_aggregate(aggname)
-        for agg_func in agg.metadata['AGGREGATES']:
-            if agg_func != 'delta':
-                rrd_args.append("RRA:%s:0.5:%d:100000" % (agg_func.upper(),
-                    agg.metadata['STEP'] / step))
-
+  
+def make_rrd(*args, **kwargs):
+    print args, kwargs
+    rrd_args = rrd_from_tsdb_var(*args, **kwargs)
     print rrd_args
     rrdtool.create(*rrd_args)
-
-    return rrd_file
+    return rrd_args[0]
 
 @with_setup(setup_run, None)
 def test_simple_rrd():
@@ -54,7 +39,7 @@ def test_simple_rrd():
     var.add_aggregate("10m", YYYYMMDDChunkMapper, ["average", "delta"])
 
     begin = 3600*24*365*20
-    rrd_file = rrd_from_tsdb_var(var, begin-60)
+    rrd_file = make_rrd(var, begin-60, TEST_RRD_DB_DIR)
 
     v = 0
     last_v = 0
@@ -71,7 +56,7 @@ def test_simple_rrd():
 
     def compare_aggs(aggname):
         step = int(aggname)
-        skip = step
+        skip = step*2
         agg = var.get_aggregate(aggname)
         for t in range(begin+skip, begin+60*60*24 - skip, step):
             args = [rrd_file, "AVERAGE", "-r", aggname, "-s", str(t), "-e", str(t)]
@@ -107,7 +92,7 @@ def test_rrd_gap1():
     var.add_aggregate("30s", YYYYMMDDChunkMapper, ["average", "delta"],
             metadata=dict(HEARTBEAT=90) )
     begin = 3600*24*365*20
-    rrd_file = rrd_from_tsdb_var(var, begin-60, heartbeat=90)
+    rrd_file = make_rrd(var, begin-60, TEST_RRD_DB_DIR, heartbeat=90)
 
     data = (
             (0, 0),

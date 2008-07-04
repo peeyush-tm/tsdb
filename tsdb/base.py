@@ -1,11 +1,12 @@
 import os
 import os.path
 import time
+import mmap
 
 from tsdb.error import *
 from tsdb.row import Aggregate, ROW_VALID, ROW_TYPE_MAP
 from tsdb.chunk_mapper import CHUNK_MAPPER_MAP
-from tsdb.util import write_dict, calculate_interval
+from tsdb.util import write_dict, calculate_interval, calculate_slot
 from tsdb.aggregator import Aggregator
 
 class TSDBBase(object):
@@ -320,6 +321,7 @@ class TSDBVar(TSDBBase):
         self.type = ROW_TYPE_MAP[self.metadata['TYPE_ID']]
         self.chunks = {} # memory resident chunks
         self.chunk_mapper = CHUNK_MAPPER_MAP[self.metadata['CHUNK_MAPPER_ID']]
+        self.size = self.type.size(self.metadata)
 
     @classmethod
     def is_tsdb_var(klass, path):
@@ -385,7 +387,7 @@ class TSDBVar(TSDBBase):
 
     def rowsize(self):
         """Returns the size of a row."""
-        return self.type.size(self.metadata)
+        return self.size #self.type.size(self.metadata)
 
     def _chunk(self, timestamp, create=False):
         """Retrieve the chunk that contains the given timestamp.
@@ -411,8 +413,8 @@ class TSDBVar(TSDBBase):
                     self.chunks[name] = \
                             TSDBVarChunk.create(self, name,
                                                 use_mmap=self.use_mmap)
-                    self.min_timestamp(recalculate=True)
-                    self.max_timestamp(recalculate=True)
+                    #self.min_timestamp(recalculate=True)
+                    #self.max_timestamp(recalculate=True)
                 else:
                     raise
 
@@ -476,17 +478,19 @@ class TSDBVar(TSDBBase):
 
     def get(self, timestamp):
         """Get the TSDBRow located at timestamp."""
-        timestamp = int(timestamp)
+#        print "G", timestamp
+        slot = calculate_slot(timestamp, self.metadata['STEP'])
         try:
-            if timestamp < self.min_timestamp():
+            min_slot = calculate_slot(self.min_timestamp(), self.metadata['STEP'])
+            if slot < min_slot:
                 raise TSDBVarRangeError(
-                        "%d is less the the minimum timestamp %d" % (timestamp,
-                            self.min_timestamp()))
+                        "%d is less the the minimum slot %d" % (timestamp, min_slot))
 
-            if timestamp > self.max_timestamp():
+            max_slot = calculate_slot(self.max_timestamp(), self.metadata['STEP']) + self.metadata['STEP'] - 1
+            if slot > max_slot:
                 raise TSDBVarRangeError(
-                        "%d is greater the the maximum timestamp %d" % (timestamp,
-                            self.max_timestamp()))
+                        "%d is greater the the maximum slot %d" % (timestamp, max_slot))
+                            
         except TSDBVarEmpty:
             raise TSDBVarRangeError(timestamp)
 
@@ -571,7 +575,6 @@ class TSDBVar(TSDBBase):
 
             raise StopIteration
 
-
         return select_generator(self, begin, end, flags)
 
     def insert(self, data):
@@ -579,12 +582,22 @@ class TSDBVar(TSDBBase):
 
         Data should be a subclass of TSDBRow."""
         chunk = self._chunk(data.timestamp, create=True)
+
+        max = self.metadata.get('MAX_TIMESTAMP')
+        if max is None or max < data.timestamp:
+            self.metadata['MAX_TIMESTAMP'] = data.timestamp
+
+        min = self.metadata.get('MIN_TIMESTAMP')
+        if min is None or min > data.timestamp:
+            self.metadata['MIN_TIMESTAMP'] = data.timestamp
+
         return chunk.write_row(data)
 
     def flush(self):
         """Flush all the chunks for this TSDBVar to disk."""
         for chunk in self.chunks:
             self.chunks[chunk].flush()
+        self.save_metadata()
 
     def close(self):
         """Close this TSDBVar."""

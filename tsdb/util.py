@@ -1,5 +1,7 @@
 import re
+import os
 
+from tsdb.row import Counter32, Counter64
 from tsdb.error import InvalidInterval
 
 def write_dict(path, d):
@@ -46,3 +48,32 @@ def calculate_interval(s):
         n *= INTERVAL_SCALARS[scalar]
 
     return n
+
+def calculate_slot(ts, step):
+    """Calculate which `slot` a given timestamp falls in."""
+    return int(ts/step) * step
+
+def rrd_from_tsdb_var(var, begin, rrd_path, heartbeat=None, ds_name=None):
+    """Given a TSDBVar with aggregates this function will return an array that
+    can be passed to rrdtool.create() to create an analogous RRD file."""
+
+    name = os.path.basename(var.path)
+    step = var.metadata['STEP']
+    rrd_file = os.path.join(rrd_path, "%s.rrd" % name)
+    rrd_args = [rrd_file, "--start", str(begin), "--step", str(step)]
+    if ds_name is None:
+        ds_name = name
+
+    if var.type in (Counter32, Counter64):
+        if heartbeat is None:
+            heartbeat = step*2
+        rrd_args.append("DS:%s:COUNTER:%d:0:U" % (ds_name, heartbeat))
+
+    for aggname in var.list_aggregates():
+        agg = var.get_aggregate(aggname)
+        for agg_func in agg.metadata['AGGREGATES']:
+            if agg_func != 'delta':
+                rrd_args.append("RRA:%s:0.5:%d:1000" % (agg_func.upper(),
+                    agg.metadata['STEP'] / step))
+
+    return rrd_args

@@ -79,7 +79,7 @@ class Aggregator(object):
         assert self.ancestor.metadata['STEP'] == step
 
         last_update = self.agg.metadata['LAST_UPDATE']
-        min_ts = self.ancestor.min_valid_timestamp()
+        min_ts = self.ancestor.min_timestamp()
         if min_ts > last_update:
             last_update = min_ts
             self.agg.metadata['LAST_UPDATE'] = last_update
@@ -87,7 +87,8 @@ class Aggregator(object):
         prev = self.ancestor.get(last_update)
 
         # XXX this only works for Counter types right now
-        for curr in self.ancestor.select(begin=last_update+step, flags=ROW_VALID):
+        for curr in self.ancestor.select(begin=last_update+step,
+                flags=ROW_VALID): 
             delta_t = curr.timestamp - prev.timestamp
             delta_v = curr.value - prev.value
             prev_slot = (prev.timestamp / step) * step
@@ -169,13 +170,11 @@ class Aggregator(object):
             self.agg.insert(row)
 
         self.agg.metadata['LAST_UPDATE'] = prev.timestamp
-        self.agg.save_metadata()
         self.agg.flush()
 
     def update_from_aggregate(self):
         """Update this aggregate from another aggregate."""
         # LAST_UPDATE points to the last step updated
-        print "From agg:", self.agg
 
         step = self.agg.metadata['STEP']
         steps_needed = step // self.ancestor.metadata['STEP']
@@ -222,5 +221,4 @@ class Aggregator(object):
        
         if slot is not None:
             self.agg.metadata['LAST_UPDATE'] = slot
-            self.agg.save_metadata()
             self.agg.flush()
