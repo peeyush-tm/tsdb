@@ -539,6 +539,8 @@ class TSDBVar(TSDBBase):
             end = self.max_timestamp()
         else:
             end = int(end)
+            if end > self.max_timestamp():
+                end = self.max_timestamp()
 
         if flags is not None:
             flags = int(flags)
