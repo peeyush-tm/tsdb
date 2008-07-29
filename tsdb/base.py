@@ -689,7 +689,7 @@ class TSDBVarChunk(object):
         """Calculate the offset chunk for a timestamp.
         
         This offset is relative to the beginning of this TSDBVarChunk."""
-        o = ((timestamp - self.begin) / self.tsdb_var.metadata['STEP']) \
+        o = int((timestamp - self.begin) / self.tsdb_var.metadata['STEP']) \
                 * self.tsdb_var.rowsize()
         assert o >= 0
         return o
