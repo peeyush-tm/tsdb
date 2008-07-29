@@ -546,7 +546,7 @@ class TSDBVar(TSDBBase):
             flags = int(flags)
 
         def select_generator(var, begin, end, flags):
-            current = begin
+            current = calculate_slot(begin, self.metadata['STEP'])
 
             while current <= end:
                 try:

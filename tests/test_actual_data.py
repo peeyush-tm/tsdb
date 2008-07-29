@@ -59,3 +59,20 @@ def test_gaps1():
 
     #os.system("ls -l %s/test1" % TEST_DB)
     var.get(1 + 24*3600)
+
+
+@with_setup(db_reset, db_reset)
+def test_select_bounds():
+    """if select gets called with a begin time that isn't on a slot boundary
+    data may not be found in the last slot."""
+
+    db = TSDB.create(TEST_DB)
+    var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
+    var.insert(Counter64(0, ROW_VALID, 1))
+    var.insert(Counter64(33, ROW_VALID, 2))
+    var.flush()
+
+    l = [x for x in  var.select(begin=5)]
+    print l
+    assert len(l) == 2
+
