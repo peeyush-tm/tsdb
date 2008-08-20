@@ -566,6 +566,9 @@ class TSDBVar(TSDBBase):
                     chunk = self._chunk(current, create=True)
                     row = var.get(current)
 
+                if row.timestamp > end:
+                    break
+
                 valid = True
                 if flags is not None and row.flags & flags != flags:
                     valid = False
