@@ -509,7 +509,9 @@ class TSDBVar(TSDBBase):
     def select(self, begin=None, end=None, flags=None):
         """Select data based on timestamp or flags.
 
-        None is interpreted as "don't care"
+        None is interpreted as "don't care".  The timestamp ranges are
+        inclusive to the recorded timestamp of the row, not to the entire slot
+        that the row represents.
 
         eg:
 
