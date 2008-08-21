@@ -90,3 +90,43 @@ def test_select_bounds2():
     print l
     assert len(l) == 1
 
+def create_inclusive_test_data_set():
+    db = TSDB.create(TEST_DB)
+    var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
+    var.insert(Counter64(0, ROW_VALID, 1))
+    var.insert(Counter64(33, ROW_VALID, 2))
+    var.flush()
+    return var
+
+@with_setup(db_reset, db_reset)
+def test_select_inclusive_end():
+    """check for inclusive results at end of time range"""
+
+    var = create_inclusive_test_data_set()
+
+    l = [x for x in var.select(begin=33, end=33)]
+    print l
+    assert len(l) == 1
+    assert l[0].timestamp == 33
+
+@with_setup(db_reset, db_reset)
+def test_select_inclusive_begin():
+    """check for inclusive results at end of time range"""
+
+    var = create_inclusive_test_data_set()
+
+    l = [x for x in var.select(begin=0, end=0)]
+    print l
+    assert len(l) == 1
+    assert l[0].timestamp == 0
+
+@with_setup(db_reset, db_reset)
+def test_select_inclusive_begin():
+    """check for inclusive results at end of time range"""
+
+    var = create_inclusive_test_data_set()
+
+    l = [x for x in var.select(begin=0, end=0)]
+    print l
+    assert len(l) == 1
+    assert l[0].timestamp == 0
