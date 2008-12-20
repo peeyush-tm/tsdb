@@ -658,7 +658,6 @@ class TSDBVarChunk(object):
     @classmethod
     def create(klass, tsdb_var, name, use_mmap=False):
         """Create the named TSDBVarChunk."""
-        print "%s creating %s" % (tsdb_var.path, name)
         path = os.path.join(tsdb_var.path, name)
         f = open(path, "w")
         f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
