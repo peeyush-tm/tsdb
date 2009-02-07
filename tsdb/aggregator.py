@@ -95,15 +95,18 @@ class Aggregator(object):
             curr_slot = (curr.timestamp / step) * step
 
             if self.ancestor.type.can_rollover and delta_v < 0:
-                assert uptime_var is not None 
-                delta_uptime = uptime_var.get(curr.timestamp).value - \
+                if uptime_var is not None:
+                    delta_uptime = uptime_var.get(curr.timestamp).value - \
                         uptime_var.get(prev.timestamp).value
 
-                if delta_uptime < 0:
-                    # this is a reset
-                    delta_v = curr.value
+                    if delta_uptime < 0:
+                        # this is a reset
+                        delta_v = curr.value
+                    else:
+                        delta_v = self.ancestor.type.rollover(delta_v)
                 else:
-                    delta_v = self.ancestor.type.rollover(delta_v)
+                    # no uptime var, assume reset
+                    delta_v = curr.value
 
             # XXX: this is a kludge:
             rate = float(delta_v) / float(delta_t)
