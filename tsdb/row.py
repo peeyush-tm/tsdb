@@ -264,7 +264,7 @@ class Aggregate(TSDBRow):
             return NotImplemented
 
     @classmethod
-    def get_invalid_row(self):
+    def get_invalid_row(klass):
         return klass(0,0)
 
     def invalidate(self):
