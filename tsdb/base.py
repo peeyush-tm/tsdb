@@ -2,6 +2,7 @@ import os
 import os.path
 import time
 import mmap
+import errno
 
 from tsdb.error import *
 from tsdb.row import Aggregate, ROW_VALID, ROW_TYPE_MAP
@@ -638,7 +639,11 @@ class TSDBVarChunk(object):
         self.name = name
         self.use_mmap = use_mmap
 
-        self.file = open(self.path, "r+")
+        try:
+            self.file = open(self.path, "r+")
+        except IOError, e:
+            self.file = open(self.path, "r")
+
         self.size = os.path.getsize(self.path)
 
         if self.use_mmap:
