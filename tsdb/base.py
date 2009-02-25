@@ -430,7 +430,10 @@ class TSDBVar(TSDBBase):
             chunks = self.all_chunks()
 
             self.metadata['MIN_TIMESTAMP'] = self.chunk_mapper.begin(chunks[0])
-            self.save_metadata() # XXX good idea?
+            try:
+                self.save_metadata() # XXX good idea?
+            except IOError:
+                pass
 
         return self.metadata['MIN_TIMESTAMP']
 
@@ -443,7 +446,10 @@ class TSDBVar(TSDBBase):
             chunks = self.all_chunks()
 
             self.metadata['MAX_TIMESTAMP'] = self.chunk_mapper.end(chunks[-1])
-            self.save_metadata() # XXX good idea?
+            try:
+                self.save_metadata() # XXX good idea?
+            except IOError:
+                pass
 
         return self.metadata['MAX_TIMESTAMP']
 
