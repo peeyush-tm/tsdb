@@ -38,8 +38,8 @@ class CreateTSDB(unittest.TestCase):
         """can we create a db?"""
         try:
             TSDB.create(TESTDB)
-        except:
-            self.fail("unable to create db")
+        except Exception, e:
+            self.fail("unable to create db: %s" % str(e))
 
         if not os.path.isdir(TESTDB):
             self.fail("directory doesn't exist")

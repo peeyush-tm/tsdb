@@ -7,6 +7,7 @@ import errno
 from tsdb.error import *
 from tsdb.row import Aggregate, ROW_VALID, ROW_TYPE_MAP
 from tsdb.chunk_mapper import CHUNK_MAPPER_MAP
+from tsdb.chunk_locator import ChunkLocator
 from tsdb.util import write_dict, calculate_interval, calculate_slot
 from tsdb.aggregator import Aggregator
 
@@ -35,6 +36,14 @@ class TSDBBase(object):
 
     def __repr__(self):
         return '<%s %s>' % (self.tag, self.path)
+
+    def find_db(self):
+        parent = self.parent
+        while parent:
+            if isinstance(parent, TSDB):
+                return parent
+            parent = parent.parent
+        return None
 
     def load_metadata(self):
         """Load metadata for this container.
@@ -209,10 +218,26 @@ class TSDB(TSDBBase):
     tag = "TSDB"
     metadata_map = {}
 
-    def __init__(self, path):
-        """Load the TSDB at path."""
+    def __init__(self, path, mode="r+", chunk_prefixes=[],
+            new_chunk_resolver=lambda db,new_path: new_path):
+        """Load the TSDB at path.
+        `mode` can be set to control the mode used by open()
+
+        `chunk_prefixes` a list of alternate prefixes to locate chunks
+
+        `new_chunk_resolver`
+        
+            a function that takes two arguments: the TSDB instance and the
+            full path of the chunk to be resolved.  It returns the path that
+            should be used to store the chunk.  This function is responsible
+            for making sure the returned directory exists. 
+        """
+
         TSDBBase.__init__(self)
         self.path = path
+        self.mode = mode
+        self.chunk_prefixes = chunk_prefixes
+        self.new_chunk_resolver = new_chunk_resolver
         self.load_metadata()
 
     @classmethod
@@ -238,6 +263,24 @@ class TSDB(TSDBBase):
 
         return klass(path)
 
+    def get_relpath(self, chunk_path):
+        return chunk_path.replace(self.path, '', 1).lstrip('/')
+
+    def resolve_chunk_prefix(self, chunk_path):
+        """Resolve which prefix a given chunk resides in."""
+        if self.chunk_prefixes:
+            relpath = self.get_relpath(chunk_path)
+            for prefix in self.chunk_prefixes:
+                mypath = os.path.join(prefix, relpath)
+                if os.path.exists(mypath):
+                    return mypath
+
+        return chunk_path
+
+    def resolve_new_chunk(self, chunk_path):
+        return self.new_chunk_resolver(self, chunk_path)
+
+
 class TSDBSet(TSDBBase):
     """A TSDBSet is used to organize TSDBVars into groups.
 
@@ -256,6 +299,7 @@ class TSDBSet(TSDBBase):
             raise TSDBSetDoesNotExistError("TSDBSet does not exist " + path)
 
         self.load_metadata()
+        self.db = self.find_db()
 
     @classmethod
     def is_tsdb_set(klass, path):
@@ -318,6 +362,7 @@ class TSDBVar(TSDBBase):
         self.cache_chunks = cache_chunks
 
         self.load_metadata()
+        self.db = self.find_db()
 
         self.type = ROW_TYPE_MAP[self.metadata['TYPE_ID']]
         self.chunks = {} # memory resident chunks
@@ -637,17 +682,22 @@ class TSDBVarChunk(object):
 
     def __init__(self, tsdb_var, name, use_mmap=False):
         """Load the specified TSDBVarChunk."""
-        self.path = os.path.join(tsdb_var.path, name)
-        if not os.path.exists(self.path):
-            raise TSDBVarChunkDoesNotExistError(self.path)
 
         self.tsdb_var = tsdb_var
         self.name = name
         self.use_mmap = use_mmap
+        self.mode = self.tsdb_var.db.mode
+
+        self.path = tsdb_var.db.resolve_chunk_prefix(
+                os.path.join(tsdb_var.path, name))
+
+        if not os.path.exists(self.path):
+            raise TSDBVarChunkDoesNotExistError(self.path)
 
         try:
-            self.file = open(self.path, "r+")
+            self.file = open(self.path, self.mode)
         except IOError, e:
+            # XXX this should be removed, left for now for compat
             self.file = open(self.path, "r")
 
         self.size = os.path.getsize(self.path)
@@ -669,12 +719,19 @@ class TSDBVarChunk(object):
     @classmethod
     def create(klass, tsdb_var, name, use_mmap=False):
         """Create the named TSDBVarChunk."""
-        path = os.path.join(tsdb_var.path, name)
-        f = open(path, "w")
-        f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
-            tsdb_var.rowsize(), tsdb_var.metadata['STEP']))
-        f.close()
+
+        path = tsdb_var.db.resolve_new_chunk(os.path.join(tsdb_var.path, name))
+
+        try:
+            f = open(path, "w")
+            f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
+                tsdb_var.rowsize(), tsdb_var.metadata['STEP']))
+            f.close()
+        except IOError, e:
+            raise UnableToCreateVarChunk(e)
+
         return TSDBVarChunk(tsdb_var, name, use_mmap=use_mmap)
+
 
     def flush(self):
         """Flush this TSDBVarChunk to disk."""
