@@ -484,8 +484,26 @@ class TSDBVar(TSDBBase):
             ts -= self.metadata['STEP']
 
     def get(self, timestamp):
-        """Get the TSDBRow located at timestamp."""
-#        print "G", timestamp
+        """Get the TSDBRow located at timestamp.
+        
+        .. note::
+       
+            The timestamp of the returned row may be different from the
+            timestamp requested.  This is due to the fact that the application
+            storing the row used an actual timestamp but the query refers to
+            the slot in which the timestamp argument falls.
+
+        .. note::
+
+            If an invalid row is fetched, the timestamp is set to the
+            requested timestamp since an invalid row has a timestamp of 0.
+
+        .. note::
+        
+            If the chunk does not exist it is created with all zeros and thus
+            an invalid row is returned.  For the current use case creating the
+            chunk is acceptable as the datasets are not expected to be sparse.
+        """
         slot = calculate_slot(timestamp, self.metadata['STEP'])
         try:
             min_slot = calculate_slot(self.min_timestamp(), self.metadata['STEP'])
@@ -501,14 +519,12 @@ class TSDBVar(TSDBBase):
         except TSDBVarEmpty:
             raise TSDBVarRangeError(timestamp)
 
-        try:
-            chunk = self._chunk(timestamp)
-            val = chunk.read_row(timestamp)
-        except TSDBVarChunkDoesNotExistError:
-            val = self.type.get_invalid_row()
+        chunk = self._chunk(timestamp, create=True)
+        val = chunk.read_row(timestamp)
 
         if not val.flags & ROW_VALID:
-            # if row isn't valid the timestamp is 0, so we fix that
+            # if row isn't valid the timestamp is 0
+            # set the timestamp to the slot timestamp instead
             val.timestamp = timestamp
 
         return val
@@ -520,22 +536,25 @@ class TSDBVar(TSDBBase):
         inclusive to the recorded timestamp of the row, not to the entire slot
         that the row represents.
 
-        eg:
+        .. example::
 
-        select()
-          all data for this var, valid or not
+            v = TSDB.get_var('foo')
 
-        select(begin=10000)
-          all data with a timestamp equal to or greater than 10000
+            # all data for this var, valid or not
+            v.select()
 
-        select(end=10000)
-          all data with a timestample equal to or less than 10000
+            # all data with a timestamp equal to or greater than 10000
+            v.select(begin=10000)
 
-        select(begin=10000, end=20000)
-          all data in the range of timestamps 10000 to 20000 inclusive
+            # all data with a timestamp equal to or less than 10000
+            v.select(end=10000)
 
-        select(flags=ROW_VALID)
-          all valid data """
+            # all data in the range of timestamps 10000 to 20000 inclusive
+            v.select(begin=10000, end=20000)
+
+            # all valid data
+            v.select(flags=ROW_VALID)
+        """
 
         if begin is None:
             begin = self.min_timestamp()
@@ -556,6 +575,7 @@ class TSDBVar(TSDBBase):
 
         def select_generator(var, begin, end, flags):
             current = calculate_slot(begin, self.metadata['STEP'])
+            max_ts = self.chunk_mapper.end(self.all_chunks()[-1])
 
             while current <= end:
                 try:
@@ -564,25 +584,13 @@ class TSDBVar(TSDBBase):
                     chunks = self.all_chunks()
 
                     # looking for data beyond the end of recorded data so stop.
-                    
-                    if current > self.chunk_mapper.end(chunks[-1]):
+                    if current > max_ts:
                         raise StopIteration
-
-                    # if we've found a gap in chunks, fill it in.
-                    # this is inefficient for large gaps, but only once.
-                    # there should never be large gaps so this is ok
-
-                    chunk = self._chunk(current, create=True)
-                    row = var.get(current)
 
                 if row.timestamp > end:
                     break
 
-                valid = True
-                if flags is not None and row.flags & flags != flags:
-                    valid = False
-    
-                if valid:
+                if not flags or row.flags & flags == flags:
                     yield row
 
                 current += var.metadata['STEP']
