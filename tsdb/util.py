@@ -53,9 +53,12 @@ def calculate_slot(ts, step):
     """Calculate which `slot` a given timestamp falls in."""
     return int(ts/step) * step
 
-def rrd_from_tsdb_var(var, begin, rrd_path, heartbeat=None, ds_name=None):
-    """Given a TSDBVar with aggregates this function will return an array that
-    can be passed to rrdtool.create() to create an analogous RRD file."""
+def rrd_from_tsdb_var(var, begin, rrd_path, heartbeat=None, ds_name=None,
+        rows=1000):
+    """Given a TSDBVar with aggregates return array to create analogous RRD.
+
+    Return an array that can be passed to rrdtool.create() to create an
+    analogous RRD file."""
 
     name = os.path.basename(var.path)
     step = var.metadata['STEP']
@@ -73,7 +76,7 @@ def rrd_from_tsdb_var(var, begin, rrd_path, heartbeat=None, ds_name=None):
         agg = var.get_aggregate(aggname)
         for agg_func in agg.metadata['AGGREGATES']:
             if agg_func != 'delta':
-                rrd_args.append("RRA:%s:0.5:%d:1000" % (agg_func.upper(),
-                    agg.metadata['STEP'] / step))
+                rrd_args.append("RRA:%s:0.5:%d:%d" % (agg_func.upper(),
+                    agg.metadata['STEP'] / step, rows))
 
     return rrd_args
