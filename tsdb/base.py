@@ -363,10 +363,12 @@ class TSDBVar(TSDBBase):
         else:
             return self
 
-    def update_aggregate(self, name, uptime_var=None):
+    def update_aggregate(self, name, uptime_var=None, min_last_update=None):
         """Update the named aggreagate."""
         return Aggregator(self.get_aggregate(name),
-                self._get_aggregate_ancestor(name)).update(uptime_var=uptime_var)
+                          self._get_aggregate_ancestor(name)
+                         ).update(uptime_var=uptime_var,
+                                  min_last_update=min_last_update)
 
     def update_all_aggregates(self, uptime_var=None):
         """Update all aggregates for this TSDBVar."""

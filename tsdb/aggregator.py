@@ -38,17 +38,28 @@ class Aggregator(object):
         row.flags |= ROW_VALID
         var.insert(row)
 
-    def update(self, uptime_var=None):
+    def update(self, uptime_var=None, min_last_update=None):
+        """Update an aggregate.
+
+        ``uptime_var``
+            A monotonically increasing variable that shows how long the system
+            was up at a given time.  Usually it is of type TimeTicks.
+        ``min_last_update``
+            When updating this aggregate go back no further than
+            `min_last_update`.
+        """
+
         try:
             if self.ancestor.type == Aggregate:
-                self.update_from_aggregate()
+                self.update_from_aggregate(min_last_update=min_last_update)
             else:
-                self.update_from_raw_data(uptime_var=uptime_var)
+                self.update_from_raw_data(uptime_var=uptime_var,
+                        min_last_update=min_last_update)
         except TSDBVarEmpty:
             # not enough data to build aggregate
             pass
 
-    def update_from_raw_data(self, uptime_var=None):
+    def update_from_raw_data(self, uptime_var=None, min_last_update=None):
         """Update this aggregate from raw data.
 
         The first aggregate MUST have the same step as the raw data.  (This
@@ -60,25 +71,28 @@ class Aggregator(object):
         with ROW_VALID set.
 
         Diagram of the relationship between the prev and curr elements in the
-        main loop:
+        main loop::
 
-        prev_slot          curr_slot
-        |                  |
-        v                  v
-        +----------+       +----------+
-        |   prev   | . . . |   curr   |
-        +----------+       +----------+
-             ^                   ^
-             |                   |
-             prev.timestamp      curr.timestamp
-             |                   |
-             |<---- delta_t ---->|
+            prev_slot          curr_slot
+            |                  |
+            v                  v
+            +----------+       +----------+
+            |   prev   | . . . |   curr   |
+            +----------+       +----------+
+                ^                   ^
+                |                   |
+                prev.timestamp      curr.timestamp
+                |                   |
+                |<---- delta_t ---->|
         """
 
         step = self.agg.metadata['STEP']
         assert self.ancestor.metadata['STEP'] == step
 
         last_update = self.agg.metadata['LAST_UPDATE']
+        if min_last_update and min_last_update > last_update:
+            last_update = min_last_update
+
         min_ts = self.ancestor.min_timestamp()
         if min_ts > last_update:
             last_update = min_ts
@@ -175,7 +189,7 @@ class Aggregator(object):
         self.agg.metadata['LAST_UPDATE'] = prev.timestamp
         self.agg.flush()
 
-    def update_from_aggregate(self):
+    def update_from_aggregate(self, min_last_update=None):
         """Update this aggregate from another aggregate."""
         # LAST_UPDATE points to the last step updated
 
@@ -183,9 +197,14 @@ class Aggregator(object):
         steps_needed = step // self.ancestor.metadata['STEP']
         # XXX what to do if our step isn't divisible by ancestor steps?
 
+        last_update = self.agg.metadata['LAST_UPDATE'] + \
+                        self.ancestor.metadata['STEP']
+
+        if min_last_update and min_last_update > last_update:
+            last_update = min_last_update
+
         data = self.ancestor.select(
-                begin=self.agg.metadata['LAST_UPDATE']
-                      + self.ancestor.metadata['STEP'],
+                begin=last_update,
                 end=self.ancestor.max_valid_timestamp())
 
         # get all timestamps since the last update
