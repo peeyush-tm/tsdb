@@ -5,9 +5,6 @@ import time
 import random
 
 import nose.tools
-import figleaf
-
-figleaf.start()
 
 from tsdb import *
 from tsdb.row import *
@@ -15,7 +12,7 @@ from tsdb.error import *
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper, YYYYMMChunkMapper, CHUNK_MAPPER_MAP
 from tsdb.util import calculate_interval, calculate_slot
 
-TESTDB = "tmp/testdb"
+TESTDB = os.path.join(os.environ.get('TMPDIR', 'tmp'), 'testdb')
 
 def setup():
     os.system("rm -rf %s" % TESTDB)
@@ -569,6 +566,23 @@ class TestNonDecreasing(TSDBTestCase):
         os.system("rm -rf %s.nd" % (TESTDB))
         os.system("mv %s %s.nd" % (TESTDB, TESTDB))
 
+class TestGapAggregate(TSDBTestCase):
+    def testGap(self):
+        """Make sure missing chunks are created"""
+        v = self.db.add_var('gappy', Counter64, 30, YYYYMMDDChunkMapper, {})
+        v.add_aggregate('30', YYYYMMDDChunkMapper, ['average','delta'])
+
+        v.insert(Counter64(0, 1, 100))
+        v.insert(Counter64(24*3600*3, 1, 100))
+
+        assert not os.path.exists("%s/gappy/19700102" % TESTDB)
+        assert not os.path.exists("%s/gappy/19700103" % TESTDB)
+        t0 = time.time()
+        v.update_aggregate('30')
+        assert time.time() - t0 <= 60
+        assert os.path.exists("%s/gappy/19700102" % TESTDB)
+        assert os.path.exists("%s/gappy/19700103" % TESTDB)
+
 def test_calculate_interval():
     for (x,y) in (("1s", 1), ("37s", 37), ("1m", 60), ("37m", 37*60),
             ("1h", 60*60), ("37h", 37*60*60), ("1d", 24*60*60),
@@ -591,9 +605,6 @@ def test_calculate_slot():
 
         assert calculate_slot(raw, step) == expected
 
-def teardown():
-    figleaf.stop()
-    figleaf.write_coverage(".figleaf")
 if __name__ == "__main__":
     print "these tests create large files, it may take a bit for them to run"
     unittest.main()

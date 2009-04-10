@@ -8,16 +8,16 @@ from tsdb import *
 from tsdb.row import Counter64
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper
 
-TEST_DB = "tmp/agg_stress_db"
+TESTDB = os.path.join(os.environ.get('TMPDIR', 'tmp'), 'agg_stress_testdb')
 
 def db_reset():
-    os.system("rm -rf %s" % TEST_DB)
+    os.system("rm -rf %s" % TESTDB)
 
 @with_setup(db_reset, db_reset)
 def test_gap1():
     """Test how the raw aggregator deals with gaps."""
 
-    db = TSDB.create(TEST_DB)
+    db = TSDB.create(TESTDB)
     var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
     agg = var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'],
             {'HEARTBEAT': 90})

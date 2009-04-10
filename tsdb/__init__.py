@@ -24,6 +24,9 @@ Copyright (c) 2007-2008, The Regents of the University of California, through
 Lawrence Berkeley National Laboratory (subject to receipt of any required
 approvals from the U.S. Dept. of Energy).  All rights reserved. 
 
+>>> from tsdb import TSDB
+>>> from tsdb.row import Counter32
+
 >>> db = TSDB.create("tsdb_example")
 >>> set = db.add_set("example_set")
 >>> var = set.add_var("example_var", Counter32, 60, YYYYMMDDChunkMapper)
