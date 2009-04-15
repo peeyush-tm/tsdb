@@ -29,6 +29,7 @@ class TSDBBase(object):
         self.path = None
         self.vars = {}
         self.sets = {}
+        self.aggs = []
 
     def __str__(self):
         return "%s [%s]" % (self.tag, self.path)
@@ -138,6 +139,9 @@ class TSDBBase(object):
     def list_aggregates(self):
         """Sorted list of existing aggregates."""
 
+	if self.aggs:
+            return self.aggs
+
         if not TSDBSet.is_tsdb_set(os.path.join(self.path, "TSDBAggregates")):
             return []
 
@@ -150,7 +154,8 @@ class TSDBBase(object):
 
         weighted = [ (calculate_interval(x), x) for x in aggs ]
         weighted.sort()
-        return [ x[1] for x in weighted ]
+        self.aggs = [ x[1] for x in weighted ]
+        return self.aggs
 
     def get_aggregate(self, name):
         """Get an existing aggregate."""
@@ -412,7 +417,7 @@ class TSDBVar(TSDBBase):
         return Aggregator(self.get_aggregate(name),
                           self._get_aggregate_ancestor(name)
                          ).update(uptime_var=uptime_var,
-                                  min_last_update=min_last_update)
+                                  min_last_update=int(min_last_update))
 
     def update_all_aggregates(self, uptime_var=None):
         """Update all aggregates for this TSDBVar."""
@@ -422,10 +427,22 @@ class TSDBVar(TSDBBase):
     def all_chunks(self):
         """Generate a sorted list of all chunks in this TSDBVar."""
 
+        files = []
+        if self.db.chunk_prefixes:
+            subpath = self.db.get_relpath(self.path)
+            for prefix in self.db.chunk_prefixes:
+                path = os.path.join(prefix, subpath)
+                try:
+                    files.extend(os.listdir(path))
+                except OSError:
+                    pass
+            files = set(files)
+        else:
+            files = os.listdir(self.path)
+
         l = filter(\
             lambda x: x != self.tag and \
-            not os.path.isdir(os.path.join(self.path,x)), os.listdir(self.path)\
-        )
+            not os.path.isdir(os.path.join(self.path,x)), files)
         if not l:
             raise TSDBVarEmpty("no chunks")
 
