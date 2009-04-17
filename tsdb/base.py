@@ -220,29 +220,35 @@ class TSDB(TSDBBase):
     """
 
     tag = "TSDB"
-    metadata_map = {}
+    metadata_map = {'CHUNK_PREFIXES': list}
 
-    def __init__(self, path, mode="r+", chunk_prefixes=[],
-            new_chunk_resolver=lambda db,new_path: new_path):
-        """Load the TSDB at path.
-        `mode` can be set to control the mode used by open()
+    def __init__(self, path, mode="r+" ):
+        """Load the TSDB located at ``path``.
 
-        `chunk_prefixes` a list of alternate prefixes to locate chunks
-
-        `new_chunk_resolver`
-        
-            a function that takes two arguments: the TSDB instance and the
-            full path of the chunk to be resolved.  It returns the path that
-            should be used to store the chunk.  This function is responsible
-            for making sure the returned directory exists. 
+            ``mode`` control the mode used by open() 
         """
 
         TSDBBase.__init__(self)
         self.path = path
         self.mode = mode
-        self.chunk_prefixes = chunk_prefixes
-        self.new_chunk_resolver = new_chunk_resolver
         self.load_metadata()
+        self.chunk_prefixes = self.metadata.get('CHUNK_PREFIXES', [])
+        self.new_chunk_resolver = self._get_resolver(
+                self.metadata.get('NEW_CHUNK_RESOLVER'))
+
+    @classmethod
+    def _get_resolver(klass, resolver):
+        if not resolver:
+            new_chunk_resolver = lambda db,path: path
+        else:
+            (package, func) = resolver.rsplit('.', 1)
+            try:
+                exec('import %s' % package)
+            except ImportError, e:
+                raise TSDBError("new_chunk_resolver could not be found: %s: %s"\
+                                % (resolver, e))
+            new_chunk_resolver = eval(resolver)
+        return new_chunk_resolver
 
     @classmethod
     def is_tsdb(klass, path):
@@ -250,8 +256,29 @@ class TSDB(TSDBBase):
         return klass.is_tag(path)
 
     @classmethod 
-    def create(klass, path, metadata=None):
-        """Create a new TSDB."""
+    def create(klass, path, metadata=None, chunk_prefixes=[],
+            new_chunk_resolver=None):
+        """Create a new TSDB.
+
+            ``chunk_prefixes``
+                a list of alternate prefixes to locate chunks
+
+            ``new_chunk_resolver``
+               the fully qualified path to a function that takes two arguments.
+               The signature of the function is ``resolver(db, path)``.
+
+               db is the TSDB instance and and path is the full path of the
+               chunk to be resolved.  It returns the path that should be used
+               to store the chunk.  This function is responsible for making
+               sure the returned directory exists. 
+               
+               if ``new_chunk_resolver`` is ``None`` it is set to an noop
+               function: 
+
+                   lambda db,path: path
+                   
+        """
+
         if metadata is None:
             metadata = {}
 
@@ -259,6 +286,11 @@ class TSDB(TSDBBase):
             raise TSDBAlreadyExistsError("database already exists")
 
         metadata["CREATION_TIME"] = time.time()
+        metadata["CHUNK_PREFIXES"] = chunk_prefixes
+
+        if new_chunk_resolver:
+            klass._get_resolver(new_chunk_resolver)
+            metadata["NEW_CHUNK_RESOLVER"] = new_chunk_resolver
 
         if not os.path.exists(path):
             os.mkdir(path)
