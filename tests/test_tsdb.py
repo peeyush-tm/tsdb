@@ -15,7 +15,9 @@ from tsdb.util import calculate_interval, calculate_slot
 TESTDB = os.path.join(os.environ.get('TMPDIR', 'tmp'), 'testdb')
 
 def setup():
-    os.system("rm -rf %s" % TESTDB)
+    cmd="rm -rf %s" % TESTDB
+    print "XXX>", cmd
+    os.system(cmd)
 
 # XXX add test for disjoint chunks
 # XXX add tests for min/max_timestamp for vars
@@ -364,14 +366,15 @@ class AggregatorSmokeTest(TSDBTestCase):
 
     def testFileStructure(self):
         """Do the aggregates get put in the right place?"""
+        fs = self.var.fs
         path = os.path.join(self.var.path, "TSDBAggregates")
-        self.assertTrue(os.path.isdir(path))
+        self.assertTrue(fs.isdir(path))
         hour_1 = 60 * 60
-        self.assertTrue(os.path.isdir(os.path.join(path, str(hour_1))))
-        self.assertTrue(os.path.isfile(os.path.join(path, str(hour_1), "TSDBVar")))
+        self.assertTrue(fs.isdir(os.path.join(path, str(hour_1))))
+        self.assertTrue(fs.isfile(os.path.join(path, str(hour_1), "TSDBVar")))
         hour_6 = 6 * hour_1
-        self.assertTrue(os.path.isdir(os.path.join(path, str(hour_6))))
-        self.assertTrue(os.path.isfile(os.path.join(path, str(hour_6), "TSDBVar")))
+        self.assertTrue(fs.isdir(os.path.join(path, str(hour_6))))
+        self.assertTrue(fs.isfile(os.path.join(path, str(hour_6), "TSDBVar")))
 
     def testListAggregates(self):
         self.assertEqual([str(60*60), str(6*60*60)], self.var.list_aggregates())
