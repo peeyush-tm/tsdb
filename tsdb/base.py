@@ -10,6 +10,7 @@ from tsdb.chunk_mapper import CHUNK_MAPPER_MAP
 from tsdb.util import write_dict, calculate_interval, calculate_slot
 from tsdb.aggregator import Aggregator
 from tsdb.filesystem import get_fs
+from fs import OperationFailedError
 
 class TSDBBase(object):
     """TSDBBase is a base class for other TSDB containers.
@@ -210,8 +211,15 @@ class TSDBBase(object):
     @classmethod
     def is_tag(klass, fs, path):
         """Is the current container a TSDB container of type tag?"""
-        if fs.isdir(path) and \
-            fs.isfile(os.path.join(path,klass.tag)):
+        if fs:
+            isdir = fs.isdir
+            isfile = fs.isfile
+        else:
+            isdir = os.path.isdir
+            isfile = os.path.isfile
+
+
+        if isdir(path) and isfile(os.path.join(path,klass.tag)):
             return True
         else:
             return False
@@ -696,9 +704,10 @@ class TSDBVarChunk(object):
 
         try:
             self.file = self.fs.open(self.path, self.mode)
-        except IOError, e:
+        except OperationFailedError, e:
             # XXX this should be removed, left for now for compat
-            self.file = self.fs.open(self.path, "r")
+            if e.details.errno == errno.PERM:
+                self.file = self.fs.open(self.path, "r")
 
         self.size = self.fs.getsize(self.path)
 

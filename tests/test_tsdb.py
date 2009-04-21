@@ -1,6 +1,7 @@
 import unittest
 import os
 import os.path
+import stat
 import time
 import random
 
@@ -16,7 +17,6 @@ TESTDB = os.path.join(os.environ.get('TMPDIR', 'tmp'), 'testdb')
 
 def setup():
     cmd="rm -rf %s" % TESTDB
-    print "XXX>", cmd
     os.system(cmd)
 
 # XXX add test for disjoint chunks
@@ -585,6 +585,23 @@ class TestGapAggregate(TSDBTestCase):
         assert time.time() - t0 <= 60
         assert os.path.exists("%s/gappy/19700102" % TESTDB)
         assert os.path.exists("%s/gappy/19700103" % TESTDB)
+
+class TestPermissions(TSDBTestCase):
+    def testDegradeToRead(self):
+        """Test that we degrade to a read when we can't write
+
+        Deprecated."""
+        v = self.db.add_var('foo', Counter64, 30, YYYYMMDDChunkMapper, {})
+        v.insert(Counter64(0,1,0))
+        v.close()
+
+        os.chmod(os.path.join(TESTDB, "foo", "19700101"), stat.S_IRUSR)
+        self.db.mode="w+"
+        v = self.db.get_var('foo')
+        v.select()
+
+        print v.chunks['19700101'].io.mode
+        assert v.chunks['19700101'].io.mode == 'r+'
 
 def test_calculate_interval():
     for (x,y) in (("1s", 1), ("37s", 37), ("1m", 60), ("37m", 37*60),
