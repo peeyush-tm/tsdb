@@ -593,15 +593,17 @@ class TestPermissions(TSDBTestCase):
         Deprecated."""
         v = self.db.add_var('foo', Counter64, 30, YYYYMMDDChunkMapper, {})
         v.insert(Counter64(0,1,0))
+        print [ x for x in v.select() ]
         v.close()
+        del self.db.vars['foo']
 
         os.chmod(os.path.join(TESTDB, "foo", "19700101"), stat.S_IRUSR)
         self.db.mode="w+"
         v = self.db.get_var('foo')
-        v.select()
+        print [ x for x in v.select() ]
 
         print v.chunks['19700101'].io.mode
-        assert v.chunks['19700101'].io.mode == 'r+'
+        assert v.chunks['19700101'].io.mode == 'r'
 
 def test_calculate_interval():
     for (x,y) in (("1s", 1), ("37s", 37), ("1m", 60), ("37m", 37*60),

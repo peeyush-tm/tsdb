@@ -706,8 +706,10 @@ class TSDBVarChunk(object):
             self.file = self.fs.open(self.path, self.mode)
         except OperationFailedError, e:
             # XXX this should be removed, left for now for compat
-            if e.details.errno == errno.PERM:
+            if e.details.errno == errno.EACCES:
                 self.file = self.fs.open(self.path, "r")
+            else:
+                raise
 
         self.size = self.fs.getsize(self.path)
 
