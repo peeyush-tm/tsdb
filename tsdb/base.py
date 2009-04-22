@@ -31,7 +31,8 @@ class TSDBBase(object):
 
         self.vars = {}
         self.sets = {}
-        self.aggs = []
+        self.aggs = {}
+        self.agg_list = []
 
         if not self.tag == 'TSDB':
             self.db = self._find_db()
@@ -145,38 +146,38 @@ class TSDBBase(object):
     def list_aggregates(self):
         """Sorted list of existing aggregates."""
 
-	if self.aggs:
-            return self.aggs
+	if not self.agg_list:
+            if not TSDBSet.is_tsdb_set(self.fs, os.path.join(self.path, "TSDBAggregates")):
+                return [] # XXX should this raise an exception instead?
 
-        if not TSDBSet.is_tsdb_set(self.fs, os.path.join(self.path, "TSDBAggregates")):
-            return []
+            def is_aggregate(x):
+                return TSDBVar.is_tsdb_var(self.fs,
+                        os.path.join(self.path, "TSDBAggregates", x))
 
-        def is_aggregate(x):
-            return TSDBVar.is_tsdb_var(self.fs,
-                    os.path.join(self.path, "TSDBAggregates", x))
-
-        aggs = filter(is_aggregate,
+            aggs = filter(is_aggregate,
                 self.fs.listdir(os.path.join(self.path, "TSDBAggregates")))
 
-        weighted = [ (calculate_interval(x), x) for x in aggs ]
-        weighted.sort()
-        self.aggs = [ x[1] for x in weighted ]
-        return self.aggs
+            weighted = [ (calculate_interval(x), x) for x in aggs ]
+            weighted.sort()
+            self.agg_list = [ x[1] for x in weighted ]
+
+        return self.agg_list
 
     def get_aggregate(self, name):
         """Get an existing aggregate."""
-        try:
-           set = self.get_set("TSDBAggregates")
-        except TSDBSetDoesNotExistError:
-            raise TSDBAggregateDoesNotExistError(name)
-
         name = str(calculate_interval(name))
-        try:
-            agg = set.get_var(name)
-        except TSDBVarDoesNotExistError:
-            raise TSDBAggregateDoesNotExistError(name)
+        if not self.aggs.has_key(name):
+            try:
+                set = self.get_set("TSDBAggregates")
+            except TSDBSetDoesNotExistError:
+                raise TSDBAggregateDoesNotExistError(name)
 
-        return agg
+            try:
+                self.aggs[name] = set.get_var(name)
+            except TSDBVarDoesNotExistError:
+                raise TSDBAggregateDoesNotExistError(name)
+    
+        return self.aggs[name]
 
     def add_aggregate(self, step, chunk_mapper, aggregates, metadata=None):
         """Add an aggregate at the current level.
@@ -205,6 +206,8 @@ class TSDBBase(object):
             aggset = self.get_set("TSDBAggregates")
         except:
             aggset = self.add_set("TSDBAggregates")
+
+        self.agg_list = []
 
         return aggset.add_var(str(secs), Aggregate, secs, chunk_mapper, metadata)
 
@@ -353,6 +356,7 @@ class TSDBVar(TSDBBase):
         self.path = path
         self.use_mmap = use_mmap
         self.cache_chunks = cache_chunks
+        self.chunk_list = []
 
         TSDBBase.__init__(self)
 
@@ -419,17 +423,19 @@ class TSDBVar(TSDBBase):
 
     def all_chunks(self):
         """Generate a sorted list of all chunks in this TSDBVar."""
+        if not self.chunk_list:
+            files = self.fs.listdir(self.path)
 
-        files = self.fs.listdir(self.path)
+            self.chunk_list = filter(\
+                lambda x: x != self.tag and \
+                not self.fs.isdir(os.path.join(self.path,x)), files)
 
-        l = filter(\
-            lambda x: x != self.tag and \
-            not self.fs.isdir(os.path.join(self.path,x)), files)
-        if not l:
-            raise TSDBVarEmpty("no chunks")
+            if not self.chunk_list:
+                raise TSDBVarEmpty("no chunks")
+    
+            self.chunk_list.sort()
 
-        l.sort()
-        return l
+        return self.chunk_list
 
     def rowsize(self):
         """Returns the size of a row."""
@@ -461,6 +467,7 @@ class TSDBVar(TSDBBase):
                                                 use_mmap=self.use_mmap)
                     #self.min_timestamp(recalculate=True)
                     #self.max_timestamp(recalculate=True)
+                    self.chunk_list.append(name)
                 else:
                     raise
 
