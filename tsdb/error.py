@@ -53,3 +53,8 @@ class InvalidInterval(TSDBError):
 class TSDBVarNoValidData(TSDBError):
     """The TSDBVar has no valid data"""
     pass
+
+class UnableToCreateVarChunk(TSDBError):
+    """Can't create a chunk"""
+    pass
+
