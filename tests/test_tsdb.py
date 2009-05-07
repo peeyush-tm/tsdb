@@ -1,6 +1,7 @@
 import unittest
 import os
 import os.path
+import stat
 import time
 import random
 
@@ -15,7 +16,8 @@ from tsdb.util import calculate_interval, calculate_slot
 TESTDB = os.path.join(os.environ.get('TMPDIR', 'tmp'), 'testdb')
 
 def setup():
-    os.system("rm -rf %s" % TESTDB)
+    cmd="rm -rf %s" % TESTDB
+    os.system(cmd)
 
 # XXX add test for disjoint chunks
 # XXX add tests for min/max_timestamp for vars
@@ -35,8 +37,8 @@ class CreateTSDB(unittest.TestCase):
         """can we create a db?"""
         try:
             TSDB.create(TESTDB)
-        except:
-            self.fail("unable to create db")
+        except Exception, e:
+            self.fail("unable to create db: %s" % str(e))
 
         if not os.path.isdir(TESTDB):
             self.fail("directory doesn't exist")
@@ -364,14 +366,15 @@ class AggregatorSmokeTest(TSDBTestCase):
 
     def testFileStructure(self):
         """Do the aggregates get put in the right place?"""
+        fs = self.var.fs
         path = os.path.join(self.var.path, "TSDBAggregates")
-        self.assertTrue(os.path.isdir(path))
+        self.assertTrue(fs.isdir(path))
         hour_1 = 60 * 60
-        self.assertTrue(os.path.isdir(os.path.join(path, str(hour_1))))
-        self.assertTrue(os.path.isfile(os.path.join(path, str(hour_1), "TSDBVar")))
+        self.assertTrue(fs.isdir(os.path.join(path, str(hour_1))))
+        self.assertTrue(fs.isfile(os.path.join(path, str(hour_1), "TSDBVar")))
         hour_6 = 6 * hour_1
-        self.assertTrue(os.path.isdir(os.path.join(path, str(hour_6))))
-        self.assertTrue(os.path.isfile(os.path.join(path, str(hour_6), "TSDBVar")))
+        self.assertTrue(fs.isdir(os.path.join(path, str(hour_6))))
+        self.assertTrue(fs.isfile(os.path.join(path, str(hour_6), "TSDBVar")))
 
     def testListAggregates(self):
         self.assertEqual([str(60*60), str(6*60*60)], self.var.list_aggregates())
@@ -582,6 +585,25 @@ class TestGapAggregate(TSDBTestCase):
         assert time.time() - t0 <= 60
         assert os.path.exists("%s/gappy/19700102" % TESTDB)
         assert os.path.exists("%s/gappy/19700103" % TESTDB)
+
+class TestPermissions(TSDBTestCase):
+    def testDegradeToRead(self):
+        """Test that we degrade to a read when we can't write
+
+        Deprecated."""
+        v = self.db.add_var('foo', Counter64, 30, YYYYMMDDChunkMapper, {})
+        v.insert(Counter64(0,1,0))
+        print [ x for x in v.select() ]
+        v.close()
+        del self.db.vars['foo']
+
+        os.chmod(os.path.join(TESTDB, "foo", "19700101"), stat.S_IRUSR)
+        self.db.mode="w+"
+        v = self.db.get_var('foo')
+        print [ x for x in v.select() ]
+
+        print v.chunks['19700101'].io.mode
+        assert v.chunks['19700101'].io.mode == 'r'
 
 def test_calculate_interval():
     for (x,y) in (("1s", 1), ("37s", 37), ("1m", 60), ("37m", 37*60),

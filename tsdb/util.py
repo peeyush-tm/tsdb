@@ -4,9 +4,9 @@ import os
 from tsdb.row import Counter32, Counter64
 from tsdb.error import InvalidInterval
 
-def write_dict(path, d):
+def write_dict(fs, path, d):
     """Write a dictionary in NAME: VALUE format."""
-    f = open(path, "w")
+    f = fs.open(path, "w")
 
     for key in d:
         f.write(key + ": " + str(d[key]) + "\n")

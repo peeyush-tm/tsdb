@@ -9,6 +9,8 @@ from tsdb.row import Aggregate, ROW_VALID, ROW_TYPE_MAP
 from tsdb.chunk_mapper import CHUNK_MAPPER_MAP
 from tsdb.util import write_dict, calculate_interval, calculate_slot
 from tsdb.aggregator import Aggregator
+from tsdb.filesystem import get_fs
+from fs import OperationFailedError
 
 class TSDBBase(object):
     """TSDBBase is a base class for other TSDB containers.
@@ -26,15 +28,29 @@ class TSDBBase(object):
             self.metadata = {}
         else:
             self.metadata = metadata
-        self.path = None
+
         self.vars = {}
         self.sets = {}
+        self.aggs = {}
+        self.agg_list = []
+
+        if not self.tag == 'TSDB':
+            self.db = self._find_db()
+            self.fs = self.db.fs
 
     def __str__(self):
         return "%s [%s]" % (self.tag, self.path)
 
     def __repr__(self):
         return '<%s %s>' % (self.tag, self.path)
+
+    def _find_db(self):
+        parent = self
+        while parent:
+            if isinstance(parent, TSDB):
+                return parent
+            parent = parent.parent
+        raise TSDBError("Unable to locate root")
 
     def load_metadata(self):
         """Load metadata for this container.
@@ -48,7 +64,7 @@ class TSDBBase(object):
         With one name/value pair per line.  Lists are stored as the str()
         representation of the actual list."""
 
-        f = open(os.path.join(self.path, self.tag), "r")
+        f = self.fs.open(os.path.join(self.path, self.tag), "r")
 
         for line in f:
             line = line.strip()
@@ -68,13 +84,13 @@ class TSDBBase(object):
 
     def save_metadata(self):
         """Save metadata for this container."""
-        write_dict(os.path.join(self.path, self.tag), self.metadata)
+        write_dict(self.fs, os.path.join(self.path, self.tag), self.metadata)
 
     def list_sets(self):
         """List TSDBSets in this container."""
         return filter( \
-                lambda x: TSDBSet.is_tsdb_set(os.path.join(self.path, x)),
-                os.listdir(self.path))
+                lambda x: TSDBSet.is_tsdb_set(self.fs, os.path.join(self.path, x)),
+                self.fs.listdir(self.path))
 
     def get_set(self, name):
         """Get named TSDBSet."""
@@ -92,12 +108,12 @@ class TSDBBase(object):
             try:
                 tsdb_set = tsdb_set.get_set(step)
             except TSDBSetDoesNotExistError:
-                TSDBSet.create(prefix, step)
+                TSDBSet.create(self.fs, prefix, step)
                 tsdb_set = tsdb_set.get_set(step)
 
             prefix = os.path.join(prefix, step)
 
-        TSDBSet.create(prefix, steps[-1])
+        TSDBSet.create(self.fs, prefix, steps[-1])
         tsdb_set = tsdb_set.get_set(steps[-1])
 
         return tsdb_set
@@ -105,8 +121,8 @@ class TSDBBase(object):
     def list_vars(self):
         """List TSDBVars in this container."""
         return filter(lambda x: \
-                TSDBVar.is_tsdb_var(os.path.join(self.path, x)),
-                os.listdir(self.path))
+                TSDBVar.is_tsdb_var(self.fs, os.path.join(self.path, x)),
+                self.fs.listdir(self.path))
 
     def get_var(self, name, **kwargs):
         """Get named TSDBVar."""
@@ -124,40 +140,44 @@ class TSDBBase(object):
             except TSDBSetDoesNotExistError:
                 self.add_set(prefix)
 
-        TSDBVar.create(self.path, name, type, step, chunk_mapper, metadata)
+        TSDBVar.create(self.fs, self.path, name, type, step, chunk_mapper, metadata)
         return self.get_var(name)
 
     def list_aggregates(self):
         """Sorted list of existing aggregates."""
 
-        if not TSDBSet.is_tsdb_set(os.path.join(self.path, "TSDBAggregates")):
-            return []
+	if not self.agg_list:
+            if not TSDBSet.is_tsdb_set(self.fs, os.path.join(self.path, "TSDBAggregates")):
+                return [] # XXX should this raise an exception instead?
 
-        def is_aggregate(x):
-            return TSDBVar.is_tsdb_var(
-                    os.path.join(self.path, "TSDBAggregates", x))
+            def is_aggregate(x):
+                return TSDBVar.is_tsdb_var(self.fs,
+                        os.path.join(self.path, "TSDBAggregates", x))
 
-        aggs = filter(is_aggregate,
-                os.listdir(os.path.join(self.path, "TSDBAggregates")))
+            aggs = filter(is_aggregate,
+                self.fs.listdir(os.path.join(self.path, "TSDBAggregates")))
 
-        weighted = [ (calculate_interval(x), x) for x in aggs ]
-        weighted.sort()
-        return [ x[1] for x in weighted ]
+            weighted = [ (calculate_interval(x), x) for x in aggs ]
+            weighted.sort()
+            self.agg_list = [ x[1] for x in weighted ]
+
+        return self.agg_list
 
     def get_aggregate(self, name):
         """Get an existing aggregate."""
-        try:
-           set = self.get_set("TSDBAggregates")
-        except TSDBSetDoesNotExistError:
-            raise TSDBAggregateDoesNotExistError(name)
-
         name = str(calculate_interval(name))
-        try:
-            agg = set.get_var(name)
-        except TSDBVarDoesNotExistError:
-            raise TSDBAggregateDoesNotExistError(name)
+        if not self.aggs.has_key(name):
+            try:
+                set = self.get_set("TSDBAggregates")
+            except TSDBSetDoesNotExistError:
+                raise TSDBAggregateDoesNotExistError(name)
 
-        return agg
+            try:
+                self.aggs[name] = set.get_var(name)
+            except TSDBVarDoesNotExistError:
+                raise TSDBAggregateDoesNotExistError(name)
+    
+        return self.aggs[name]
 
     def add_aggregate(self, step, chunk_mapper, aggregates, metadata=None):
         """Add an aggregate at the current level.
@@ -187,13 +207,22 @@ class TSDBBase(object):
         except:
             aggset = self.add_set("TSDBAggregates")
 
+        self.agg_list = []
+
         return aggset.add_var(str(secs), Aggregate, secs, chunk_mapper, metadata)
 
     @classmethod
-    def is_tag(klass, path):
+    def is_tag(klass, fs, path):
         """Is the current container a TSDB container of type tag?"""
-        if os.path.isdir(path) and \
-            os.path.isfile(os.path.join(path,klass.tag)):
+        if fs:
+            isdir = fs.isdir
+            isfile = fs.isfile
+        else:
+            isdir = os.path.isdir
+            isfile = os.path.isfile
+
+
+        if isdir(path) and isfile(os.path.join(path,klass.tag)):
             return True
         else:
             return False
@@ -207,22 +236,36 @@ class TSDB(TSDBBase):
     """
 
     tag = "TSDB"
-    metadata_map = {}
+    metadata_map = {'CHUNK_PREFIXES': list}
 
-    def __init__(self, path):
-        """Load the TSDB at path."""
+    def __init__(self, root, mode="r+" ):
+        """Load the TSDB located at ``path``.
+
+            ``mode`` control the mode used by open() 
+        """
+
         TSDBBase.__init__(self)
-        self.path = path
+        self.path = "/"
+        self.mode = mode
+        self.fs = get_fs(root, [])
         self.load_metadata()
+        self.chunk_prefixes = self.metadata.get('CHUNK_PREFIXES', [])
+        if self.chunk_prefixes:
+            self.fs = get_fs(root, self.chunk_prefixes)
 
     @classmethod
-    def is_tsdb(klass, path):
+    def is_tsdb(klass, fs, path):
         """Does path contain a TSDB?"""
-        return klass.is_tag(path)
+        return klass.is_tag(fs, path)
 
     @classmethod 
-    def create(klass, path, metadata=None):
-        """Create a new TSDB."""
+    def create(klass, path, metadata=None, chunk_prefixes=[]):
+        """Create a new TSDB.
+
+            ``chunk_prefixes``
+                a list of alternate prefixes to locate chunks
+        """
+
         if metadata is None:
             metadata = {}
 
@@ -230,11 +273,13 @@ class TSDB(TSDBBase):
             raise TSDBAlreadyExistsError("database already exists")
 
         metadata["CREATION_TIME"] = time.time()
+        metadata["CHUNK_PREFIXES"] = chunk_prefixes
 
         if not os.path.exists(path):
             os.mkdir(path)
 
-        write_dict(os.path.join(path, klass.tag), metadata)
+        fs = get_fs(path, [])
+        write_dict(fs, os.path.join("/", klass.tag), metadata)
 
         return klass(path)
 
@@ -248,32 +293,32 @@ class TSDBSet(TSDBBase):
     metadata_map = {}
     def __init__(self, parent, path, metadata=None):
         """Load the TSDBSet at path."""
-        TSDBBase.__init__(self)
         self.path = path
         self.parent = parent
+        TSDBBase.__init__(self)
 
-        if not os.path.exists(path) or not self.is_tsdb_set(path):
+        if not self.fs.exists(path) or not self.is_tsdb_set(self.fs, path):
             raise TSDBSetDoesNotExistError("TSDBSet does not exist " + path)
 
         self.load_metadata()
 
     @classmethod
-    def is_tsdb_set(klass, path):
+    def is_tsdb_set(klass, fs, path):
         """Does path contain a TSDBSet?"""
-        return klass.is_tag(path)
+        return klass.is_tag(fs, path)
 
     @classmethod
-    def create(klass, root, name, metadata=None):
+    def create(klass, fs, root, name, metadata=None):
         """Create a new TSDBSet with name name rooted at root."""
         if metadata is None:
             metadata = {}
 
         path = os.path.join(root, name)
-        if os.path.exists(path):
+        if fs.exists(path):
             raise TSDBNameInUseError("%s already exists at %s" % (name, path))
 
-        os.mkdir(path)
-        write_dict(os.path.join(path, klass.tag), metadata)
+        fs.makedir(path)
+        write_dict(fs, os.path.join(path, klass.tag), metadata)
 
     def lock(self, block=True):
         """Acquire a write lock.
@@ -307,15 +352,16 @@ class TSDBVar(TSDBBase):
     def __init__(self, parent, path, use_mmap=False, cache_chunks=False,
             metadata=None):
         """Load the TSDBVar at path."""
-        TSDBBase.__init__(self)
-
-        if not os.path.exists(path) or not self.is_tsdb_var(path):
-            raise TSDBVarDoesNotExistError("TSDBVar does not exist:" + path)
-
         self.parent = parent
         self.path = path
         self.use_mmap = use_mmap
         self.cache_chunks = cache_chunks
+        self.chunk_list = []
+
+        TSDBBase.__init__(self)
+
+        if not self.fs.exists(path) or not self.is_tsdb_var(self.fs, path):
+            raise TSDBVarDoesNotExistError("TSDBVar does not exist:" + path)
 
         self.load_metadata()
 
@@ -325,18 +371,18 @@ class TSDBVar(TSDBBase):
         self.size = self.type.size(self.metadata)
 
     @classmethod
-    def is_tsdb_var(klass, path):
+    def is_tsdb_var(klass, fs, path):
         """Does path contain a TSDBVar?"""
-        return klass.is_tag(path)
+        return klass.is_tag(fs, path)
 
     @classmethod
-    def create(klass, root, name, vartype, step, chunk_mapper, metadata=None):
+    def create(klass, fs, root, name, vartype, step, chunk_mapper, metadata=None):
         """Create a new TSDBVar."""
         if metadata is None:
             metadata = {}
 
         path = os.path.join(root, name)
-        if os.path.exists(path):
+        if fs.exists(path):
             raise TSDBNameInUseError("%s already exists at %s" % (name, path))
 
         if type(vartype) == str:
@@ -351,9 +397,9 @@ class TSDBVar(TSDBBase):
         metadata["CREATION_TIME"] = time.time()
         metadata["CHUNK_MAPPER_ID"] = chunk_mapper.chunk_mapper_id
 
-        os.mkdir(path)
+        fs.makedir(path)
 
-        write_dict(os.path.join(path, klass.tag), metadata)
+        write_dict(fs, os.path.join(path, klass.tag), metadata)
 
     def _get_aggregate_ancestor(self, agg_name):
         agg_list = self.list_aggregates()
@@ -363,12 +409,12 @@ class TSDBVar(TSDBBase):
         else:
             return self
 
-    def update_aggregate(self, name, uptime_var=None, min_last_update=None):
+    def update_aggregate(self, name, uptime_var=None, min_last_update=0):
         """Update the named aggreagate."""
         return Aggregator(self.get_aggregate(name),
                           self._get_aggregate_ancestor(name)
                          ).update(uptime_var=uptime_var,
-                                  min_last_update=min_last_update)
+                                  min_last_update=int(min_last_update))
 
     def update_all_aggregates(self, uptime_var=None):
         """Update all aggregates for this TSDBVar."""
@@ -377,16 +423,19 @@ class TSDBVar(TSDBBase):
 
     def all_chunks(self):
         """Generate a sorted list of all chunks in this TSDBVar."""
+        if not self.chunk_list:
+            files = self.fs.listdir(self.path)
 
-        l = filter(\
-            lambda x: x != self.tag and \
-            not os.path.isdir(os.path.join(self.path,x)), os.listdir(self.path)\
-        )
-        if not l:
-            raise TSDBVarEmpty("no chunks")
+            self.chunk_list = filter(\
+                lambda x: x != self.tag and \
+                not self.fs.isdir(os.path.join(self.path,x)), files)
 
-        l.sort()
-        return l
+            if not self.chunk_list:
+                raise TSDBVarEmpty("no chunks")
+    
+            self.chunk_list.sort()
+
+        return self.chunk_list
 
     def rowsize(self):
         """Returns the size of a row."""
@@ -418,6 +467,7 @@ class TSDBVar(TSDBBase):
                                                 use_mmap=self.use_mmap)
                     #self.min_timestamp(recalculate=True)
                     #self.max_timestamp(recalculate=True)
+                    self.chunk_list.append(name)
                 else:
                     raise
 
@@ -647,20 +697,28 @@ class TSDBVarChunk(object):
 
     def __init__(self, tsdb_var, name, use_mmap=False):
         """Load the specified TSDBVarChunk."""
-        self.path = os.path.join(tsdb_var.path, name)
-        if not os.path.exists(self.path):
-            raise TSDBVarChunkDoesNotExistError(self.path)
 
         self.tsdb_var = tsdb_var
         self.name = name
         self.use_mmap = use_mmap
+        self.mode = self.tsdb_var.db.mode
+        self.fs = tsdb_var.fs
+
+        self.path = os.path.join(tsdb_var.path, name)
+
+        if not self.fs.exists(self.path):
+            raise TSDBVarChunkDoesNotExistError(self.path)
 
         try:
-            self.file = open(self.path, "r+")
-        except IOError, e:
-            self.file = open(self.path, "r")
+            self.file = self.fs.open(self.path, self.mode)
+        except OperationFailedError, e:
+            # XXX this should be removed, left for now for compat
+            if e.details.errno == errno.EACCES:
+                self.file = self.fs.open(self.path, "r")
+            else:
+                raise
 
-        self.size = os.path.getsize(self.path)
+        self.size = self.fs.getsize(self.path)
 
         if self.use_mmap:
             self.mmap = mmap.mmap(self.file.fileno(), self.size)
@@ -679,12 +737,19 @@ class TSDBVarChunk(object):
     @classmethod
     def create(klass, tsdb_var, name, use_mmap=False):
         """Create the named TSDBVarChunk."""
+
         path = os.path.join(tsdb_var.path, name)
-        f = open(path, "w")
-        f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
-            tsdb_var.rowsize(), tsdb_var.metadata['STEP']))
-        f.close()
+
+        try:
+            f = tsdb_var.fs.open(path, "w")
+            f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
+                tsdb_var.rowsize(), tsdb_var.metadata['STEP']))
+            f.close()
+        except IOError, e:
+            raise UnableToCreateVarChunk(e)
+
         return TSDBVarChunk(tsdb_var, name, use_mmap=use_mmap)
+
 
     def flush(self):
         """Flush this TSDBVarChunk to disk."""
