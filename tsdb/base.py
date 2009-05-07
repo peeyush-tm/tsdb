@@ -484,7 +484,7 @@ class TSDBVar(TSDBBase):
             self.metadata['MIN_TIMESTAMP'] = self.chunk_mapper.begin(chunks[0])
             try:
                 self.save_metadata() # XXX good idea?
-            except IOError:
+            except OperationFailedError:
                 pass
 
         return self.metadata['MIN_TIMESTAMP']
@@ -500,7 +500,7 @@ class TSDBVar(TSDBBase):
             self.metadata['MAX_TIMESTAMP'] = self.chunk_mapper.end(chunks[-1])
             try:
                 self.save_metadata() # XXX good idea?
-            except IOError:
+            except OperationFailedError:
                 pass
 
         return self.metadata['MAX_TIMESTAMP']
@@ -745,7 +745,7 @@ class TSDBVarChunk(object):
             f.write("\0" * tsdb_var.chunk_mapper.size(os.path.basename(path),
                 tsdb_var.rowsize(), tsdb_var.metadata['STEP']))
             f.close()
-        except IOError, e:
+        except OperationFailedError, e:
             raise UnableToCreateVarChunk(e)
 
         return TSDBVarChunk(tsdb_var, name, use_mmap=use_mmap)
