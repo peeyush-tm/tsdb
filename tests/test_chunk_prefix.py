@@ -36,8 +36,16 @@ def test_PrefixChunkLocator_noop():
         assert db.metadata['CHUNK_PREFIXES'][i] == prefixes[i]
 
 @with_setup(db_reset, None) #db_reset)
+def test_PrefixChunkLocator_prefix_count():
+    TSDB.create(TEST_DB, chunk_prefixes=[TEST_DB, TEST_DB + "_alt"])
+    db = TSDB(TEST_DB)
+    l = [x for x in db.fs]
+    print l
+    assert len(l) == 2
+
+@with_setup(db_reset, None) #db_reset)
 def test_PrefixChunkLocator_create():
-    TSDB.create(TEST_DB, chunk_prefixes=[TEST_DB + "_alt", TEST_DB])
+    TSDB.create(TEST_DB, chunk_prefixes=[TEST_DB, TEST_DB + "_alt"])
     db = TSDB(TEST_DB)
 
     v = db.add_var("bar", Counter32, 60, chunk_mapper.YYYYMMDDChunkMapper)
@@ -51,6 +59,7 @@ def test_PrefixChunkLocator_create():
 
     del db.vars['bar']
 
+    print db.metadata['CHUNK_PREFIXES']
     os.mkdir("%s/bar" % (TEST_DB+'_alt'))
     os.system("mv %s/bar/19700101 %s/bar/19700101" % (TEST_DB, TEST_DB+'_alt'))
     v = db.get_var("bar")

@@ -251,7 +251,8 @@ class TSDB(TSDBBase):
         self.load_metadata()
         self.chunk_prefixes = self.metadata.get('CHUNK_PREFIXES', [])
         if self.chunk_prefixes:
-            self.fs = get_fs(root, self.chunk_prefixes)
+            # the root is listed as the first prefix, don't add it again
+            self.fs = get_fs(root, self.chunk_prefixes[1:])
 
     @classmethod
     def is_tsdb(klass, fs, path):
