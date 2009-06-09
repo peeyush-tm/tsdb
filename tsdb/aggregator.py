@@ -110,14 +110,17 @@ class Aggregator(object):
 
             if self.ancestor.type.can_rollover and delta_v < 0:
                 if uptime_var is not None:
-                    delta_uptime = uptime_var.get(curr.timestamp).value - \
-                        uptime_var.get(prev.timestamp).value
-
-                    if delta_uptime < 0:
-                        # this is a reset
+                    try:
+                        delta_uptime = uptime_var.get(curr.timestamp).value - \
+                            uptime_var.get(prev.timestamp).value
+                        if delta_uptime < 0:
+                            # this is a reset
+                            delta_v = curr.value
+                        else:
+                            delta_v = self.ancestor.type.rollover(delta_v)
+                    except TSDBVarRangeError:
+                        # uptime var no help, assume reset
                         delta_v = curr.value
-                    else:
-                        delta_v = self.ancestor.type.rollover(delta_v)
                 else:
                     # no uptime var, assume reset
                     delta_v = curr.value
