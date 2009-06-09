@@ -12,6 +12,7 @@ from tsdb.aggregator import Aggregator
 from tsdb.filesystem import get_fs
 from fs import OperationFailedError
 
+
 class TSDBBase(object):
     """TSDBBase is a base class for other TSDB containers.
 
@@ -366,9 +367,16 @@ class TSDBVar(TSDBBase):
 
         self.load_metadata()
 
-        self.type = ROW_TYPE_MAP[self.metadata['TYPE_ID']]
+        try:
+            typeid = self.metadata['TYPE_ID']
+            chunk_mapper_id = self.metadata['CHUNK_MAPPER_ID']
+        except KeyError:
+            raise InvalidMetaData
+
+        self.type = ROW_TYPE_MAP[typeid]
+        self.chunk_mapper = CHUNK_MAPPER_MAP[chunk_mapper_id]
+
         self.chunks = {} # memory resident chunks
-        self.chunk_mapper = CHUNK_MAPPER_MAP[self.metadata['CHUNK_MAPPER_ID']]
         self.size = self.type.size(self.metadata)
 
     @classmethod
@@ -562,12 +570,12 @@ class TSDBVar(TSDBBase):
             min_slot = calculate_slot(self.min_timestamp(), self.metadata['STEP'])
             if slot < min_slot:
                 raise TSDBVarRangeError(
-                        "%d is less the the minimum slot %d" % (timestamp, min_slot))
+                        "%d is less than the minimum slot %d" % (timestamp, min_slot))
 
             max_slot = calculate_slot(self.max_timestamp(), self.metadata['STEP']) + self.metadata['STEP'] - 1
             if slot > max_slot:
                 raise TSDBVarRangeError(
-                        "%d is greater the the maximum slot %d" % (timestamp, max_slot))
+                        "%d is greater than the maximum slot %d" % (timestamp, max_slot))
                             
         except TSDBVarEmpty:
             raise TSDBVarRangeError(timestamp)
@@ -634,8 +642,6 @@ class TSDBVar(TSDBBase):
                 try:
                     row = var.get(current)
                 except TSDBVarRangeError:
-                    chunks = self.all_chunks()
-
                     # looking for data beyond the end of recorded data so stop.
                     if current > max_ts:
                         raise StopIteration

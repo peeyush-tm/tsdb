@@ -58,3 +58,6 @@ class UnableToCreateVarChunk(TSDBError):
     """Can't create a chunk"""
     pass
 
+class InvalidMetaData(Exception):
+    """Problem with metadata"""
+    pass
