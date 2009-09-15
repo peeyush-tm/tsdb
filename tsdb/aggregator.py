@@ -13,10 +13,9 @@ class Aggregator(object):
     CounterAggregator.  It should be possible to generalize some of this
     functionality into a base Aggregator class though."""
 
-    def __init__(self, agg, ancestor, max_rate=10*1000*1000*1000):
+    def __init__(self, agg, ancestor):
         self.agg = agg
         self.ancestor = ancestor
-        self.max_rate = max_rate
 
     def _empty_row(self, var, timestamp):
         aggs = {}
@@ -38,7 +37,8 @@ class Aggregator(object):
         row.flags |= ROW_VALID
         var.insert(row)
 
-    def update(self, uptime_var=None, min_last_update=None):
+    def update(self, uptime_var=None, min_last_update=None, max_rate=None,
+            max_rate_callback=None):
         """Update an aggregate.
 
         ``uptime_var``
@@ -47,19 +47,39 @@ class Aggregator(object):
         ``min_last_update``
             When updating this aggregate go back no further than
             `min_last_update`.
+        ``max_rate``
+            if rate > max_rate then the row in the computed aggregate is set
+            to invalid.  if ``max_rate_callback`` is not None then
+            ``max_rate_callback`` to notify the upper level application of
+            potentially bad data. 
+        ``max_rate_callback``
+            a function that takes five arguments:
+                ``ancestor``
+                    a TSDBVar which is the ancestor of the aggregate being computed
+                ``agg``
+                    a TSDBVar which is the aggregate being computed
+                ``rate``
+                    the computed rate
+                ``prev``
+                    the earlier data point
+                ``curr``
+                    the current data point
         """
 
         try:
             if self.ancestor.type == Aggregate:
-                self.update_from_aggregate(min_last_update=min_last_update)
+                self.update_from_aggregate(min_last_update=min_last_update,
+                        max_rate=max_rate, max_rate_callback=max_rate_callback)
             else:
                 self.update_from_raw_data(uptime_var=uptime_var,
-                        min_last_update=min_last_update)
+                        min_last_update=min_last_update, max_rate=max_rate,
+                        max_rate_callback=max_rate_callback)
         except TSDBVarEmpty:
             # not enough data to build aggregate
             pass
 
-    def update_from_raw_data(self, uptime_var=None, min_last_update=None):
+    def update_from_raw_data(self, uptime_var=None, min_last_update=None,
+            max_rate=None, max_rate_callback=None):
         """Update this aggregate from raw data.
 
         The first aggregate MUST have the same step as the raw data.  (This
@@ -108,6 +128,9 @@ class Aggregator(object):
             prev_slot = (prev.timestamp / step) * step
             curr_slot = (curr.timestamp / step) * step
 
+            # tests for edge cases: rollover, invalid, large gaps in data
+            # not sure how to properly invalidate individual rows
+
             if self.ancestor.type.can_rollover and delta_v < 0:
                 if uptime_var is not None:
                     try:
@@ -125,17 +148,16 @@ class Aggregator(object):
                     # no uptime var, assume reset
                     delta_v = curr.value
 
-            # XXX: this is a kludge:
             rate = float(delta_v) / float(delta_t)
-            if rate > 12000000000 / 8:
-                print "WARNING: bad data: ", rate, prev, curr
+
+            if max_rate and rate > max_rate:
+                if max_rate_callback:
+                    max_rate_callback(self.ancestor, self.agg, rate, prev, curr)
+
                 prev = curr
                 continue
 
             assert delta_v >= 0
-            #
-            # tests for edge cases: rollover, invalid, large gaps in data
-            # not sure how to properly invalidate individual rows
 
             # allocate a portion of this data to a given bin
             prev_frac = int( floor(
@@ -168,6 +190,8 @@ class Aggregator(object):
             # if we have some left, try to backfill
             if curr_frac + prev_frac != delta_v:
                 missed_slots = range(prev_slot+step, curr_slot, step)
+                if not missed_slots:
+                    missed_slots = [curr_slot]
                 missed = delta_v - (curr_frac + prev_frac)
                 assert missed > 0
                 missed_frac = missed / len(missed_slots)
@@ -192,7 +216,8 @@ class Aggregator(object):
         self.agg.metadata['LAST_UPDATE'] = prev.timestamp
         self.agg.flush()
 
-    def update_from_aggregate(self, min_last_update=None):
+    def update_from_aggregate(self, min_last_update=None, max_rate=None,
+            max_rate_callback=None):
         """Update this aggregate from another aggregate."""
         # LAST_UPDATE points to the last step updated
 

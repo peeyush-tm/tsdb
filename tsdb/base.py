@@ -418,17 +418,20 @@ class TSDBVar(TSDBBase):
         else:
             return self
 
-    def update_aggregate(self, name, uptime_var=None, min_last_update=0):
+    def update_aggregate(self, name, uptime_var=None, min_last_update=0,
+            max_rate=None, max_rate_callback=None):
         """Update the named aggreagate."""
         return Aggregator(self.get_aggregate(name),
                           self._get_aggregate_ancestor(name)
                          ).update(uptime_var=uptime_var,
-                                  min_last_update=int(min_last_update))
+                                  min_last_update=int(min_last_update),
+                                  max_rate=max_rate,
+                                  max_rate_callback=max_rate_callback)
 
-    def update_all_aggregates(self, uptime_var=None):
+    def update_all_aggregates(self, **kwargs):
         """Update all aggregates for this TSDBVar."""
         for agg in self.list_aggregates():
-            self.update_aggregate(agg, uptime_var=uptime_var)
+            self.update_aggregate(agg, **kwargs)
 
     def all_chunks(self):
         """Generate a sorted list of all chunks in this TSDBVar."""

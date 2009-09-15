@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 
+from fs.base import FS
 import fs.osfs
 import fs.multifs
 
 def get_fs(root, prefixes):
     """return an FS object suitable for the environment"""
-    rootfs = fs.osfs.OSFS(root)
+    rootfs = fs.osfs.OSFS(root, thread_syncronize=False)
 
     if not prefixes:
         return rootfs
@@ -36,6 +37,12 @@ class UnionFS(fs.multifs.MultiFS):
 
     UnionFS does not handle the migration of data from one layer to the other.
     """
+
+    def __init__(self):
+        FS.__init__(self, thread_syncronize=False)
+
+        self.fs_sequence = []
+        self.fs_lookup = {}
 
     def makedir(self, path, **kwargs):
         fs = self._delegate_search('/')
