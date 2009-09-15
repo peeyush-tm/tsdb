@@ -46,6 +46,34 @@ def test_erroneous_data1():
     var.update_all_aggregates(uptime_var=up)
 
 @with_setup(db_reset, db_reset)
+def test_erroneous_data2():
+    """value went backwards but was not a rollover.
+    From observed data.  test max_rate and max_rate_callback as well"""
+
+    db = TSDB.create(TESTDB)
+    var = db.add_var("test1", Counter64, 30, YYYYMMDDChunkMapper)
+    up = db.add_var("uptime", TimeTicks, 30, YYYYMMDDChunkMapper)
+    agg = var.add_aggregate("30s", YYYYMMDDChunkMapper, ['average', 'delta'],
+            {'HEARTBEAT': 90})
+
+    var.insert(Counter64(1204345906, ROW_VALID, 54697031))
+    var.insert(Counter64(1204345937, ROW_VALID, 54696971))
+    var.insert(Counter64(1204345967, ROW_VALID, 54696981))
+
+    up.insert(TimeTicks(1204345906, ROW_VALID, 677744266))
+    up.insert(TimeTicks(1204345937, ROW_VALID, 677747340))
+
+    bad_data = []
+    def callback(ancestor, agg, rate, prev, curr):
+        bad_data.append(rate)
+
+    var.update_all_aggregates(uptime_var=up, max_rate=int(11*1e9),
+            max_rate_callback=callback)
+
+    print bad_data
+    assert bad_data[0] > int(11*1e9)
+
+@with_setup(db_reset, db_reset)
 def test_gaps1():
     """there are one or more missing chunks in the middle of the range"""
 
