@@ -639,7 +639,7 @@ class TSDBVar(TSDBBase):
 
         def select_generator(var, begin, end, flags):
             current = calculate_slot(begin, self.metadata['STEP'])
-            max_ts = self.chunk_mapper.end(self.all_chunks()[-1])
+            max_ts = self.max_timestamp()
 
             while current <= end:
                 try:
