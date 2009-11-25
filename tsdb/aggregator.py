@@ -193,15 +193,15 @@ class Aggregator(object):
                 if not missed_slots:
                     missed_slots = [curr_slot]
                 missed = delta_v - (curr_frac + prev_frac)
-                assert missed > 0
-                missed_frac = missed / len(missed_slots)
-                missed_rem = missed % (missed_frac * len(missed_slots))
-                for slot in missed_slots:
-                    self._increase_delta(self.agg, slot, missed_frac)
+                if missed > 0:
+                    missed_frac = missed / len(missed_slots)
+                    missed_rem = missed % (missed_frac * len(missed_slots))
+                    for slot in missed_slots:
+                        self._increase_delta(self.agg, slot, missed_frac)
 
-                # distribute the remainder
-                for i in range(missed_rem):
-                    self._increase_delta(self.agg, missed_slots[i], 1)
+                    # distribute the remainder
+                    for i in range(missed_rem):
+                        self._increase_delta(self.agg, missed_slots[i], 1)
 
             prev = curr
 
