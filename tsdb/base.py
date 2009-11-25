@@ -255,6 +255,19 @@ class TSDB(TSDBBase):
             # the root is listed as the first prefix, don't add it again
             self.fs = get_fs(root, self.chunk_prefixes[1:])
 
+        if self.metadata.has_key('MEMCACHED_URI'):
+            self.memcache = True
+            try:
+                import cmemcache as memcache
+            except ImportError:
+                try:
+                    import memcache
+                except:
+                    self.memcache = False
+
+            if self.memcache:
+                self.memcache = memcache.Client([self.metadata['MEMCACHED_URI']])
+
     @classmethod
     def is_tsdb(klass, fs, path):
         """Does path contain a TSDB?"""
