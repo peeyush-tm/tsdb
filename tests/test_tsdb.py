@@ -569,23 +569,6 @@ class TestNonDecreasing(TSDBTestCase):
         os.system("rm -rf %s.nd" % (TESTDB))
         os.system("mv %s %s.nd" % (TESTDB, TESTDB))
 
-class TestGapAggregate(TSDBTestCase):
-    def testGap(self):
-        """Make sure missing chunks are created"""
-        v = self.db.add_var('gappy', Counter64, 30, YYYYMMDDChunkMapper, {})
-        v.add_aggregate('30', YYYYMMDDChunkMapper, ['average','delta'])
-
-        v.insert(Counter64(0, 1, 100))
-        v.insert(Counter64(24*3600*3, 1, 100))
-
-        assert not os.path.exists("%s/gappy/19700102" % TESTDB)
-        assert not os.path.exists("%s/gappy/19700103" % TESTDB)
-        t0 = time.time()
-        v.update_aggregate('30')
-        assert time.time() - t0 <= 60
-        assert os.path.exists("%s/gappy/19700102" % TESTDB)
-        assert os.path.exists("%s/gappy/19700103" % TESTDB)
-
 class TestPermissions(TSDBTestCase):
     def testDegradeToRead(self):
         """Test that we degrade to a read when we can't write

@@ -596,8 +596,11 @@ class TSDBVar(TSDBBase):
         except TSDBVarEmpty:
             raise TSDBVarRangeError(timestamp)
 
-        chunk = self._chunk(timestamp, create=True)
-        val = chunk.read_row(timestamp)
+        try:
+            chunk = self._chunk(timestamp)
+            val = chunk.read_row(timestamp)
+        except TSDBVarChunkDoesNotExistError:
+            val = self.type.get_invalid_row()
 
         if not val.flags & ROW_VALID:
             # if row isn't valid the timestamp is 0
