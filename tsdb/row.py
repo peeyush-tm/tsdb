@@ -161,6 +161,10 @@ class TimeTicks(TSDBRow):
     def _from_str(self, str):
         return int(str)
 
+    @classmethod
+    def rollover(klass, value):
+        return value + 2**32
+
 class Aggregate(TSDBRow):
     """Represent an aggregate value, such as an average.
     
