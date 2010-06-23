@@ -3,13 +3,17 @@ import os
 import random
 import math
 from nose import with_setup
+from nose.plugins.skip import SkipTest
 
 from tsdb import *
 from tsdb.row import Counter32, Counter64
 from tsdb.chunk_mapper import YYYYMMDDChunkMapper
 from tsdb.util import rrd_from_tsdb_var
 
-import rrdtool
+try:
+    import rrdtool
+except ImportError:
+    raise SkipTest()
 
 from fpconst import isNaN
 
