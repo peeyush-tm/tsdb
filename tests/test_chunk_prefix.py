@@ -15,7 +15,7 @@ def db_reset():
         os.makedirs(prefix)
     
 def check_path(fs, a, b):
-    pa = fs.getsyspath(a)
+    pa = fs.resolve_path(a)
     pb = os.path.abspath(b)
     print pa, pb
     assert pa == pb
@@ -39,7 +39,7 @@ def test_PrefixChunkLocator_noop():
 def test_PrefixChunkLocator_prefix_count():
     TSDB.create(TEST_DB, chunk_prefixes=[TEST_DB, TEST_DB + "_alt"])
     db = TSDB(TEST_DB)
-    l = [x for x in db.fs]
+    l = [x for x in db.fs.fs_sequence]
     print l
     assert len(l) == 2
 
@@ -50,6 +50,8 @@ def test_PrefixChunkLocator_create():
 
     v = db.add_var("bar", Counter32, 60, chunk_mapper.YYYYMMDDChunkMapper)
     v.insert(Counter32(0, 0, 0))
+    v.flush()
+
     check_path(v.fs, v.chunks['19700101'].path,
             os.path.join(TEST_DB, 'bar', '19700101'))
 
@@ -68,6 +70,7 @@ def test_PrefixChunkLocator_create():
         os.path.join(TEST_DB+'_alt', 'bar', '19700101'))
 
     v.insert(Counter32(24*60*60 + 1, 1, 1))
+    v.flush()
     v.get(24*60*60 + 1)
     check_path(v.fs, v.chunks['19700102'].path,
             os.path.join(TEST_DB, 'bar', '19700102'))

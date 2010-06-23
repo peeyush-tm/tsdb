@@ -9,7 +9,7 @@ setup(name='TSDB',
       author_email='jdugan@es.net',
       url='http://code.google.com/p/tsdb/',
       packages=['tsdb'],
-      install_requires=['fpconst==0.7.2', 'fs==0.1.0'],
+      install_requires=['fpconst==0.7.2'],
       dependency_links=['http://pyfilesystem.googlecode.com/svn/trunk/#egg=fs'],
       entry_points = {
           'console_scripts': [

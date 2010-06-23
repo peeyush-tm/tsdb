@@ -1,34 +1,66 @@
 #!/usr/bin/env python
 
-from fs.base import FS
-import fs.osfs
-import fs.multifs
+import os
+import os.path
+import errno
+
+class OSFS(object):
+    def __init__(self, root):
+        self.root = root
+
+    def __str__(self):
+        return '<OSFS: %s>' % self.root
+
+    def __repr__(self):
+        return '<OSFS: %s>' % self.root
+
+    def resolve_path(self, path):
+        if path[0] == '/':
+            path = path[1:]
+        return os.path.abspath(os.path.join(self.root, path))
+
+    def exists(self, path):
+        return os.path.exists(self.resolve_path(path))
+
+    def isdir(self, path):
+        return os.path.isdir(self.resolve_path(path))
+
+    def isfile(self, path):
+        return os.path.isfile(self.resolve_path(path))
+
+    def getsize(self, path):
+        return os.path.getsize(self.resolve_path(path))
+
+    def makedir(self, path):
+        return os.mkdir(self.resolve_path(path))
+
+    def listdir(self, path):
+        return os.listdir(self.resolve_path(path))
+
+    def open(self, path, mode="r", **kwargs):
+        return open(self.resolve_path(path), mode, **kwargs)
 
 def get_fs(root, prefixes):
     """return an FS object suitable for the environment"""
-    rootfs = fs.osfs.OSFS(root, thread_syncronize=False)
+    rootfs = OSFS(root)
 
     if not prefixes:
         return rootfs
 
     unionfs = UnionFS()
+    unionfs.addfs(rootfs)
 
-    unionfs.addfs("root", rootfs)
-    i = 0
     for prefix in prefixes:
-        name = "prefix%d" % i
-        prefix_fs = fs.osfs.OSFS(prefix)
-        unionfs.addfs(name, prefix_fs)
-        i += 1
+        unionfs.addfs(OSFS(prefix))
 
     return unionfs
     
-class UnionFS(fs.multifs.MultiFS):
+class UnionFS(object):
     """Synthetic union file system.
     
     ``UnionFS`` creates a union filesystem by searching each subfilesystem in
-    order to find files.  New files are always created in the first
-    subfilesystem.
+    order to find files.  New files and directories are always created in the
+    first subfilesystem.
 
     This is particularly useful in a situation where there is smaller, fast
     filesystem (eg. in RAM or on an SSD) for frequently accessed data and a
@@ -39,20 +71,75 @@ class UnionFS(fs.multifs.MultiFS):
     """
 
     def __init__(self):
-        FS.__init__(self, thread_syncronize=False)
-
         self.fs_sequence = []
-        self.fs_lookup = {}
+
+    def _search(self, path):
+        for fs in self.fs_sequence:
+            if fs.exists(path):
+                return fs
+
+        return None
+
+    def _not_found(self, path):
+        e = IOError()
+        e.filename = path
+        e.errno = errno.ENOENT
+        e.strerror = os.strerror(errno.ENOENT)
+        return e
+
+    def resolve_path(self, path):
+        fs = self._search(path)
+        if not fs:
+            raise self._not_found(path)
+
+        return fs.resolve_path(path)
+
+    def addfs(self, fs):
+        self.fs_sequence.append(fs)
+
+    def exists(self, path):
+        return self._search(path) is not None
+
+    def isdir(self, path):
+        fs = self._search(path)
+        if fs:
+            if os.path.isdir(fs.resolve_path(path)):
+                return True
+
+        return False
+
+    def isfile(self, path):
+        fs = self._search(path)
+        if fs:
+            if os.path.isfile(fs.resolve_path(path)):
+                return True
+
+        return False
+
+    def getsize(self, path):
+        return os.path.getsize(self.resolve_path(path))
+
+    def listdir(self, path):
+        files = []
+        for fs in self.fs_sequence:
+            try:
+                files += fs.listdir(path)
+            except IOError:
+                pass
+
+        return list(set(files))
 
     def makedir(self, path, **kwargs):
-        fs = self._delegate_search('/')
+        fs = self.fs_sequence[0]
         return fs.makedir(path, **kwargs)
 
     def open(self, path, mode="r", **kwargs):
         if not self.exists(path) and mode in ('w', 'r+', 'w+', 'a+'):
-            fs = self._delegate_search('/')
+            fs = self.fs_sequence[0]
             return fs.open(path, mode=mode, **kwargs)
         else:
-            return super(UnionFS, self).open(path, mode=mode, **kwargs)
+            for fs in self.fs_sequence:
+                if fs.exists(path):
+                    return open(fs.resolve_path(path), mode=mode, **kwargs)
 
-
+            raise self._not_found(path)

@@ -492,7 +492,8 @@ class TSDBVar(TSDBBase):
                                                 use_mmap=self.use_mmap)
                     #self.min_timestamp(recalculate=True)
                     #self.max_timestamp(recalculate=True)
-                    self.chunk_list.append(name)
+                    if self.chunk_list:
+                        self.chunk_list.append(name)
                 else:
                     raise
 
@@ -737,9 +738,9 @@ class TSDBVarChunk(object):
 
         try:
             self.file = self.fs.open(self.path, self.mode)
-        except OperationFailedError, e:
+        except IOError, e:
             # XXX this should be removed, left for now for compat
-            if e.details.errno == errno.EACCES:
+            if e.errno == errno.EACCES:
                 self.file = self.fs.open(self.path, "r")
             else:
                 raise
