@@ -10,8 +10,6 @@ from tsdb.chunk_mapper import CHUNK_MAPPER_MAP
 from tsdb.util import write_dict, calculate_interval, calculate_slot
 from tsdb.aggregator import Aggregator
 from tsdb.filesystem import get_fs
-from fs import OperationFailedError
-
 
 class TSDBBase(object):
     """TSDBBase is a base class for other TSDB containers.
