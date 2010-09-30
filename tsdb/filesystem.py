@@ -34,6 +34,9 @@ class OSFS(object):
     def makedir(self, path):
         return os.mkdir(self.resolve_path(path))
 
+    def makedirs(self, path):
+        return os.makedirs(self.resolve_path(path))
+
     def listdir(self, path):
         return os.listdir(self.resolve_path(path))
 
@@ -136,6 +139,10 @@ class UnionFS(object):
     def open(self, path, mode="r", **kwargs):
         if not self.exists(path) and mode in ('w', 'r+', 'w+', 'a+'):
             fs = self.fs_sequence[0]
+            if not fs.exists(os.path.dirname(path)):
+                # the directory structure may exist in a backing store, but if
+                # we're creating a file we need it to exist in the top layer
+                fs.makedirs(path)
             return fs.open(path, mode=mode, **kwargs)
         else:
             for fs in self.fs_sequence:
