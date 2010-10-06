@@ -7,12 +7,13 @@ from tsdb import *
 from tsdb.row import *
 
 TEST_DB = "tmp/chunk_locator"
-prefixes=[TEST_DB + "_alt"]
+PREFIXES=[TEST_DB, TEST_DB + "_alt"]
 
 def db_reset():
-    os.system("rm -rf %s %s" % (TEST_DB, " ".join(prefixes)))
-    for prefix in prefixes:
+    os.system("rm -rf %s %s" % (TEST_DB, " ".join(PREFIXES)))
+    for prefix in PREFIXES:
         os.makedirs(prefix)
+    TSDB.create(TEST_DB, chunk_prefixes=PREFIXES)
     
 def check_path(fs, a, b):
     pa = fs.resolve_path(a)
@@ -22,7 +23,6 @@ def check_path(fs, a, b):
 
 @with_setup(db_reset, None) #db_reset)
 def test_PrefixChunkLocator_noop():
-    TSDB.create(TEST_DB, chunk_prefixes=prefixes)
     db = TSDB(TEST_DB)
 
     v = db.add_var("bar", Counter32, 60, chunk_mapper.YYYYMMDDChunkMapper)
@@ -30,14 +30,13 @@ def test_PrefixChunkLocator_noop():
     check_path(v.fs, v.chunks['19700101'].path, 
                     os.path.join(TEST_DB, 'bar', '19700101'))
 
-    print db.metadata['CHUNK_PREFIXES'], prefixes
-    assert len(db.metadata['CHUNK_PREFIXES']) == len(prefixes)
-    for i in range(len(prefixes)):
-        assert db.metadata['CHUNK_PREFIXES'][i] == prefixes[i]
+    print db.metadata['CHUNK_PREFIXES'], PREFIXES
+    assert len(db.metadata['CHUNK_PREFIXES']) == len(PREFIXES)
+    for i in range(len(PREFIXES)):
+        assert db.metadata['CHUNK_PREFIXES'][i] == PREFIXES[i]
 
 @with_setup(db_reset, None) #db_reset)
 def test_PrefixChunkLocator_prefix_count():
-    TSDB.create(TEST_DB, chunk_prefixes=[TEST_DB, TEST_DB + "_alt"])
     db = TSDB(TEST_DB)
     l = [x for x in db.fs.fs_sequence]
     print l
@@ -45,7 +44,6 @@ def test_PrefixChunkLocator_prefix_count():
 
 @with_setup(db_reset, None) #db_reset)
 def test_PrefixChunkLocator_create():
-    TSDB.create(TEST_DB, chunk_prefixes=[TEST_DB, TEST_DB + "_alt"])
     db = TSDB(TEST_DB)
 
     v = db.add_var("bar", Counter32, 60, chunk_mapper.YYYYMMDDChunkMapper)
@@ -77,5 +75,27 @@ def test_PrefixChunkLocator_create():
 
     print v.all_chunks()
     assert v.all_chunks() == ['19700101', '19700102']
+
+
+@with_setup(db_reset, None) #db_reset)
+def test_PrefixChunkLocator_missing_top_dir_create():
+    db = TSDB(TEST_DB)
+    print "yeehaw!", TEST_DB
+
+    v = db.add_var("bar", Counter32, 60, chunk_mapper.YYYYMMDDChunkMapper)
+    v.insert(Counter32(0, 0, 0))
+    v.flush()
+
+    os.system("mv %s/bar %s" % (TEST_DB, TEST_DB+'_alt'))
+    
+    print v.chunks['19700101'].path
+
+    v = db.get_var("bar")
+    v.insert(Counter32(3600*24 + 1, 0, 0))
+    v.flush()
+
+    check_path(v.fs, v.chunks['19700102'].path,
+            os.path.join(TEST_DB, 'bar', '19700102'))
+
 
 
