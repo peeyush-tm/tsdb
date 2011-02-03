@@ -124,11 +124,20 @@ class UnionFS(object):
 
     def listdir(self, path):
         files = []
+        notfound_cnt = 0
         for fs in self.fs_sequence:
             try:
                 files += fs.listdir(path)
             except IOError:
                 pass
+            except OSError, e:
+                if e.errno != errno.ENOENT:
+                    raise
+                else:
+                    notfound_cnt += 1
+
+        if notfound_cnt == len(self.fs_sequence):
+            raise self._not_found(path)
 
         return list(set(files))
 

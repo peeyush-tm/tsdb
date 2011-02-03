@@ -99,3 +99,17 @@ def test_PrefixChunkLocator_missing_top_dir_create():
 
 
 
+@with_setup(db_reset, None) #db_reset)
+def test_PrefixChunkLocator_missing_top_dir_listdir():
+    db = TSDB(TEST_DB)
+    print "yeehaw!", TEST_DB
+
+    v = db.add_var("bar", Counter32, 60, chunk_mapper.YYYYMMDDChunkMapper)
+    v.add_aggregate("60", chunk_mapper.YYYYMMDDChunkMapper, ['average','delta'],
+                metadata=dict(HEARTBEAT=12*60*60))
+    v.insert(Counter32(0, 0, 0))
+    v.flush()
+
+    # this used to raise an exception before bugfix
+    print v.list_aggregates()
+
