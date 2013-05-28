@@ -276,4 +276,28 @@ class Aggregate(TSDBRow):
         for agg in self.aggregate_order:
             setattr(self, agg, float('NaN'))
 
-ROW_TYPE_MAP = [TSDBRow, Counter32, Counter64, Gauge32, TimeTicks, Aggregate]
+class Integer32(TSDBRow):
+    """Represent a SNMP INTEGER variable.
+
+    >>> x = INTEGER(1,1,1)
+    >>> y = INTEGER(1,1,1)
+    >>> x == y
+    True
+    >>> z = INTEGER(1,1,2)
+    >>> x == z
+    False
+    """
+
+    type_id = 6
+    version = 1
+    pack_format = TSDBRow.pack_format + "l"
+    can_rollover = False
+
+    def _from_str(self, str):
+        return int(str)
+
+# According to RFC2578 INTEGER is indistinguisable from Integer32
+INTEGER = Integer32
+
+ROW_TYPE_MAP = [TSDBRow, Counter32, Counter64, Gauge32, TimeTicks, Aggregate,
+        Integer32]
