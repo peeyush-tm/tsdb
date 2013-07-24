@@ -123,6 +123,10 @@ class Aggregator(object):
         # XXX this only works for Counter types right now
         for curr in self.ancestor.select(begin=last_update+step,
                 flags=ROW_VALID): 
+
+            if curr.timestamp > last_update+(3*step):
+                break
+
             delta_t = curr.timestamp - prev.timestamp
             delta_v = curr.value - prev.value
             prev_slot = (prev.timestamp / step) * step

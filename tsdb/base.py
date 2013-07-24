@@ -548,6 +548,9 @@ class TSDBVar(TSDBBase):
     def max_valid_timestamp(self):
         """Finds the timestamp of the maximum valid row."""
         ts = self.max_timestamp()
+        now = int(time.time())
+        if ts > now:
+            ts = now
         while True:
             try:
                 chunk = self._chunk(ts)
@@ -649,12 +652,20 @@ class TSDBVar(TSDBBase):
             if end > self.max_timestamp():
                 end = self.max_timestamp()
 
+        now = int(time.time())
+        if end > now:
+            end = now
+
         if flags is not None:
             flags = int(flags)
 
         def select_generator(var, begin, end, flags):
             current = calculate_slot(begin, self.metadata['STEP'])
             max_ts = self.max_timestamp()
+
+            now = int(time.time())
+            if max_ts > now:
+                max_ts = now
 
             while current <= end:
                 try:
