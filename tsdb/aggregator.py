@@ -1,6 +1,7 @@
 import itertools
 from math import floor, ceil
 from fpconst import isNaN
+import time
 
 from tsdb.error import *
 from tsdb.row import Aggregate, ROW_VALID, ROW_TYPE_MAP
@@ -119,10 +120,11 @@ class Aggregator(object):
             self.agg.metadata['LAST_UPDATE'] = last_update
        
         prev = self.ancestor.get(last_update)
+        now = int(time.time())
 
         # XXX this only works for Counter types right now
         for curr in self.ancestor.select(begin=last_update+step,
-                end=last_update+(2*step), # limit unnecessary IO
+                end=now, # limit unnecessary IO, there's no data in the future
                 flags=ROW_VALID): 
 
 
